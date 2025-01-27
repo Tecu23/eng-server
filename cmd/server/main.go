@@ -8,6 +8,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/tecu23/eng-server/pkg/game"
 	"github.com/tecu23/eng-server/pkg/server"
 )
 
@@ -21,7 +22,9 @@ var upgrader = websocket.Upgrader{
 }
 
 func main() {
-	hub := server.NewHub()
+	gm := game.NewSimpleManager()
+
+	hub := server.NewHub(gm)
 	go hub.Run()
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {

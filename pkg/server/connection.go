@@ -1,9 +1,12 @@
 package server
 
 import (
+	"encoding/json"
 	"log"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/tecu23/eng-server/pkg/messages"
 )
 
 type Connection struct {
@@ -36,12 +39,15 @@ func (c *Connection) ReadPump() {
 
 		// We only handle text
 		if msgType == websocket.TextMessage {
-			inbound := InboundMessage{
-				Conn:    c,
-				Payload: msg,
+			var inbound messages.InboundMessage
+			if err := json.Unmarshal(msg, &inbound); err == nil {
+				c.hub.inbound <- InboundHubMessage{
+					Conn:    c,
+					Message: inbound,
+				}
+			} else {
+				log.Println("Failed to parse inbound JSON:", err)
 			}
-
-			c.hub.inbound <- inbound
 		}
 	}
 }
@@ -65,4 +71,15 @@ func (c *Connection) WritePump() {
 			return
 		}
 	}
+}
+
+// SendJSON is a helper for sending JSON to this connection
+func (c *Connection) SendJSON(v interface{}) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		log.Println("Error marshaling JSON:", err)
+		return
+	}
+
+	c.send <- data
 }

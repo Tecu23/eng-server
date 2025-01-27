@@ -1,37 +1,40 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/tecu23/eng-server/pkg/game"
+	"github.com/tecu23/eng-server/pkg/messages"
 )
 
-type InboundMessage struct {
-	Conn    *Connection // who sent it
-	Payload []byte      // raw JSON or text
+type InboundHubMessage struct {
+	Conn    *Connection             // who sent it
+	Message messages.InboundMessage // raw JSON or text
 }
 
 type Hub struct {
+	mu          sync.RWMutex
 	connections map[*Connection]bool // Registered connections
 
-	register   chan *Connection // Incoming registration
-	unregister chan *Connection // Incoming unregistration
+	register   chan *Connection       // Incoming registration
+	unregister chan *Connection       // Incoming unregistration
+	inbound    chan InboundHubMessage // Channel or inbound messages that the hub might route or broadcast
 
-	inbound chan InboundMessage // Channel or inbound messages that the hub might route or broadcast
+	// broadcast chan []byte // Channel to broadcast to everyone
 
-	broadcast chan []byte // Channel to broadcast to everyone
-
-	gameSessions map[string]*game.GameSession // Store all game sessions in a map
+	gameManager *game.SimpleManager
 }
 
-func NewHub() *Hub {
+func NewHub(gm *game.SimpleManager) *Hub {
 	return &Hub{
-		connections:  make(map[*Connection]bool),
-		register:     make(chan *Connection),
-		unregister:   make(chan *Connection),
-		inbound:      make(chan InboundMessage),
-		broadcast:    make(chan []byte),
-		gameSessions: make(map[string]*game.GameSession),
+		connections: make(map[*Connection]bool),
+		register:    make(chan *Connection),
+		unregister:  make(chan *Connection),
+		inbound:     make(chan InboundHubMessage),
+		// broadcast:    make(chan []byte),
+		gameManager: gm,
 	}
 }
 
@@ -45,21 +48,7 @@ func (h *Hub) Run() {
 			h.unregisterConnection(conn)
 
 		case msg := <-h.inbound:
-			// Decide how to handle messages.
-			// For example, parse JSON for "action" field and route.
 			h.handleInbound(msg)
-
-		case message := <-h.broadcast:
-			// Broadcast to all connections if needed
-			for conn := range h.connections {
-				select {
-				case conn.send <- message:
-				default:
-					// If sending fails, close the connection
-					close(conn.send)
-					delete(h.connections, conn)
-				}
-			}
 		}
 	}
 }
@@ -73,11 +62,15 @@ func (h *Hub) Unregister(conn *Connection) {
 }
 
 func (h *Hub) registerConnection(conn *Connection) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.connections[conn] = true
 	fmt.Println("New connection registered!")
 }
 
 func (h *Hub) unregisterConnection(conn *Connection) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if _, ok := h.connections[conn]; ok {
 		delete(h.connections, conn)
 		close(conn.send)
@@ -86,52 +79,70 @@ func (h *Hub) unregisterConnection(conn *Connection) {
 }
 
 // handleInbound is where you decode or route the message from a client.
-func (h *Hub) handleInbound(msg InboundMessage) {
-	// For example, you might parse JSON:
-	//   { "type": "JOIN_GAME", "gameID": "123" }
-	//   { "type": "MAKE_MOVE", "gameID": "123", "move": "e2e4" }
-	// This is just a placeholder to show the structure.
+func (h *Hub) handleInbound(msg InboundHubMessage) {
+	switch msg.Message.Type {
+	case "START_NEW_GAME":
 
-	// Let's do a simple print:
-	fmt.Printf("Inbound message from a connection: %s\n", string(msg.Payload))
-
-	// In a real app, you'd unmarshal the JSON, check "type" and "gameID"
-	// then do something like:
-	//  switch messageType {
-	//  case "JOIN_GAME":
-	//      h.joinGame(msg.Conn, gameID)
-	//  case "MAKE_MOVE":
-	//      h.makeMove(gameID, moveData)
-	//  ...
-	//  }
-}
-
-// joinGame is an example of how you'd attach a connection to a game session
-// or create a new session if it doesn't exist.
-func (h *Hub) joinGame(conn *Connection, gameID string) *game.GameSession {
-	session, ok := h.gameSessions[gameID]
-	if !ok {
-		session = &game.GameSession{
-			ID: gameID,
-			// Set up initial times, etc.
+		var payload messages.StartNewGamePayload
+		if err := json.Unmarshal(msg.Message.Payload, &payload); err != nil {
+			h.sendError(msg.Conn, "Invalid START_NEW_GAME payload")
+			return
 		}
-		h.gameSessions[gameID] = session
+
+		gameID, err := h.gameManager.CreateGameSession(payload)
+		if err != nil {
+			h.sendError(msg.Conn, err.Error())
+			return
+		}
+
+		resp := messages.OutboundMessage{
+			Type: "GAME_CREATED",
+			Payload: messages.GameCreatedPayload{
+				GameID:      gameID,
+				InitialFEN:  "startpos",
+				WhiteTime:   30000,
+				BlackTime:   30000,
+				CurrentTurn: "white",
+			},
+		}
+
+		msg.Conn.SendJSON(resp)
+	case "MAKE_MOVE":
+		var payload messages.MakeMovePayload
+		if err := json.Unmarshal(msg.Message.Payload, &payload); err != nil {
+			h.sendError(msg.Conn, "Invalid MAKE_MOVE payload")
+			return
+		}
+		state, err := h.gameManager.MakeMove(payload.GameID, payload.Move)
+		if err != nil {
+			h.sendError(msg.Conn, err.Error())
+			return
+		}
+		// Broadcast or just send to this connection:
+		resp := messages.OutboundMessage{
+			Type: "GAME_STATE",
+			Payload: messages.GameStatePayload{
+				GameID:      payload.GameID,
+				BoardFEN:    state.BoardFEN,
+				WhiteTime:   state.WhiteTime,
+				BlackTime:   state.BlackTime,
+				CurrentTurn: state.CurrentTurn,
+				IsCheckmate: state.IsCheckmate,
+				IsDraw:      state.IsDraw,
+			},
+		}
+		msg.Conn.SendJSON(resp)
+	default:
+		h.sendError(msg.Conn, "Unknown message type")
 	}
-	// You could store a reference in conn, like:
-	//   conn.gameID = gameID
-	// Or keep track in the session itself. Depends on your design.
-	return session
 }
 
-// makeMove might look up the session, call session.HandleMove, then broadcast new state.
-func (h *Hub) makeMove(gameID, move string) error {
-	session, ok := h.gameSessions[gameID]
-	if !ok {
-		return fmt.Errorf("game %s not found", gameID)
+func (h *Hub) sendError(conn *Connection, msg string) {
+	resp := messages.OutboundMessage{
+		Type: "ERROR",
+		Payload: messages.ErrorPayload{
+			Message: msg,
+		},
 	}
-
-	fmt.Println("sessions:", session)
-	// session.HandleMove(move)
-	// Then broadcast updated state to all players in that game
-	return nil
+	conn.SendJSON(resp)
 }
