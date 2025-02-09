@@ -12,12 +12,13 @@ import (
 
 // UCIEngine represents a UCI-compatible chess engine
 type UCIEngine struct {
-	cmd        *exec.Cmd
-	stdinPipe  io.WriteCloser
-	stdoutPipe io.ReadCloser
-	reader     *bufio.Reader
-	mutex      sync.Mutex
-	quitChan   chan struct{}
+	cmd          *exec.Cmd
+	stdinPipe    io.WriteCloser
+	stdoutPipe   io.ReadCloser
+	reader       *bufio.Reader
+	mutex        sync.Mutex
+	quitChan     chan struct{}
+	BestMoveChan chan string
 }
 
 // NewUCIEngine starts the engine process and returns a UCIEngine instance.
@@ -40,11 +41,12 @@ func NewUCIEngine(enginePath string) (*UCIEngine, error) {
 	}
 
 	e := &UCIEngine{
-		cmd:        cmd,
-		stdinPipe:  stdin,
-		stdoutPipe: stdout,
-		reader:     bufio.NewReader(stdout),
-		quitChan:   make(chan struct{}),
+		cmd:          cmd,
+		stdinPipe:    stdin,
+		stdoutPipe:   stdout,
+		reader:       bufio.NewReader(stdout),
+		quitChan:     make(chan struct{}),
+		BestMoveChan: make(chan string, 1),
 	}
 
 	// Initialize UCI mode
@@ -76,6 +78,20 @@ func (e *UCIEngine) readLoop() {
 			line = strings.TrimSpace(line)
 
 			log.Println("ENGINE>", line)
+
+			// Check if the engine sent a best move.
+			if strings.HasPrefix(line, "bestmove") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					bestMove := fields[1]
+					// Send bestMove into the channel without blocking.
+					select {
+					case e.BestMoveChan <- bestMove:
+					default:
+					}
+				}
+			}
+
 		}
 	}
 }
@@ -94,5 +110,14 @@ func (e *UCIEngine) Close() error {
 	if err := e.cmd.Wait(); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (e *UCIEngine) SendCommand(cmd string) error {
+	err := e.writeCommand(cmd)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

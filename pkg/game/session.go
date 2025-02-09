@@ -1,28 +1,164 @@
 package game
 
 import (
+	"fmt"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/tecu23/eng-server/pkg/engine"
 )
 
 type GameSession struct {
-	GameID string
+	ID string
 
-	BoardFEN    string
-	WhiteTime   int64
-	BlackTime   int64
-	CurrentTurn string
+	Turn string
 
-	IsCheckmate bool
-	IsDraw      bool
+	Moves []string
 
-	LastMoveTime time.Time
-	mu           sync.Mutex
+	FEN string
+
+	WhiteTime      int64
+	BlackTime      int64
+	WhiteIncrement int64
+	BlackIncrement int64
+
+	MovesToGo int64
+
+	lastMoveTime time.Time
+
+	Conn *websocket.Conn
+
+	Engine *engine.UCIEngine
+
+	done chan bool
+
+	mu sync.Mutex
 }
 
-func (gs *GameSession) HandleMove(_ string) error {
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
+func (s *GameSession) startClockTicker() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.updateClock()
+		case <-s.done:
+			return
+		}
+	}
+}
+
+func (s *GameSession) updateClock() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Calculate elapsed time since the last move.
+	elapsed := time.Since(s.lastMoveTime).Milliseconds()
+	var remainingTime int64
+
+	// Determine which clock to update based on whose turn it is.
+	if s.Turn == "white" {
+		remainingTime = s.WhiteTime - elapsed
+	} else {
+		remainingTime = s.BlackTime - elapsed
+	}
+
+	// Send a clock update to the client.
+	if s.Conn != nil {
+		updateMsg := map[string]interface{}{
+			"type":      "clock_update",
+			"turn":      s.Turn,
+			"remaining": remainingTime,
+		}
+		s.Conn.WriteJSON(updateMsg)
+	}
+
+	// If the clock reaches zero, handle the timeout.
+	if remainingTime <= 0 {
+		s.handleTimeout()
+	}
+}
+
+func (s *GameSession) handleTimeout() {
+	// Signal to stop the clock ticker.
+	select {
+	case s.done <- true:
+	default:
+	}
+
+	var result string
+	if s.Turn == "white" {
+		result = "Black wins on time"
+	} else {
+		result = "White wins on time"
+	}
+
+	if s.Conn != nil {
+		s.Conn.WriteJSON(map[string]interface{}{
+			"type":   "game_over",
+			"reason": result,
+		})
+	}
+
+	// Optionally shut down the engine if one was running.
+	if s.Engine != nil {
+		s.Engine.Close()
+	}
+}
+
+func (s *GameSession) ProcessMove(move string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Calculate how much time has elapsed since the turn started.
+	elapsed := time.Since(s.lastMoveTime).Milliseconds()
+
+	// Update the clock for the active player.
+	if s.Turn == "white" {
+		s.WhiteTime = s.WhiteTime - elapsed + s.WhiteIncrement
+		s.Turn = "black" // Switch turn.
+	} else {
+		s.BlackTime = s.BlackTime - elapsed + s.BlackIncrement
+		s.Turn = "white"
+	}
+
+	// Record the move.
+	s.Moves = append(s.Moves, move)
+
+	// Reset the timer for the new move.
+	s.lastMoveTime = time.Now()
+
+	// Inform the client about the move and the turn change.
+	if s.Conn != nil {
+		s.Conn.WriteJSON(map[string]interface{}{
+			"type": "move",
+			"move": move,
+			"turn": s.Turn,
+		})
+	}
 
 	return nil
+}
+
+func (s *GameSession) ProcessEngineMove() {
+	s.mu.Lock()
+	availableTime := s.BlackTime - time.Since(s.lastMoveTime).Milliseconds()
+	if availableTime < 0 {
+		availableTime = 0
+	}
+	s.mu.Unlock()
+
+	command := fmt.Sprintf("go movetime %d", availableTime)
+	if err := s.Engine.SendCommand(command); err != nil {
+		// Handle error
+		return
+	}
+
+	// Wait for the best move from the engine.
+	bestMove := <-s.Engine.BestMoveChan
+
+	// Process the move as if the engine made it.
+	s.ProcessMove(bestMove)
 }

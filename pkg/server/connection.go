@@ -10,9 +10,9 @@ import (
 )
 
 type Connection struct {
-	ws   *websocket.Conn
+	ws   *websocket.Conn // The underlying Websocket connection
 	hub  *Hub
-	send chan []byte
+	send chan []byte // Buffered channel of outbound messages.
 }
 
 func NewConnection(ws *websocket.Conn, hub *Hub) *Connection {

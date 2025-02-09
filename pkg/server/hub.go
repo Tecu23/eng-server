@@ -15,7 +15,7 @@ type InboundHubMessage struct {
 }
 
 type Hub struct {
-	mu          sync.RWMutex
+	mu          sync.RWMutex         // Mutex to protect direct access to the connections map.
 	connections map[*Connection]bool // Registered connections
 
 	register   chan *Connection       // Incoming registration

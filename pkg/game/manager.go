@@ -1,80 +1,73 @@
 package game
 
 import (
-	"errors"
-	"fmt"
 	"sync"
-	"time"
 
-	"github.com/tecu23/eng-server/pkg/messages"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
+
+	"github.com/tecu23/eng-server/pkg/engine"
 )
 
-type GameState struct {
-	BoardFEN    string
-	WhiteTime   int64
-	BlackTime   int64
-	CurrentTurn string
-	IsCheckmate bool
-	IsDraw      bool
-}
-
-type Manager interface {
-	CreateGameSession(payload messages.StartNewGamePayload) (string, error)
-	MakeMove(gameID, move string) (*GameState, error)
-}
-
-// SimpleManager is an in-memory implementation
-type SimpleManager struct {
-	sessions map[string]*GameSession
-	mu       sync.Mutex
+type Manager struct {
+	sessions map[uuid.UUID]*GameSession
+	mu       sync.RWMutex
 }
 
 // NewSimpleManager creates a new manager with in-memory storage
-func NewSimpleManager() *SimpleManager {
-	return &SimpleManager{
-		sessions: make(map[string]*GameSession),
+func NewManager() *Manager {
+	return &Manager{
+		sessions: make(map[uuid.UUID]*GameSession),
 	}
 }
 
-func (gm *SimpleManager) CreateGameSession(payload messages.StartNewGamePayload) (string, error) {
-	gm.mu.Lock()
-	defer gm.mu.Unlock()
+// CreateSession creates a new game session with the given parameters and registers it.
+func (m *Manager) CreateSession(
+	conn *websocket.Conn,
+	whiteTime, blackTime, whiteIncrement, blackIncremenent int64,
+) *GameSession {
+	sessionID := uuid.New()
 
-	gameID := fmt.Sprintf("game-%d", len(gm.sessions)+1) // simplistic unique ID
+	eng := engine.NewUCIEngine()
+
 	session := &GameSession{
-		GameID:       gameID,
-		BoardFEN:     "startpos", // or actual FEN for new game
-		WhiteTime:    int64(payload.TimeControl.Initial * 1000),
-		BlackTime:    int64(payload.TimeControl.Initial * 1000),
-		CurrentTurn:  "white",
-		LastMoveTime: GetNow(), // or time.Now()
+		ID: sessionID,
+
+		Engine: eng,
+
+		Turn: "white",
+		FEN:  "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+
+		WhiteTime:      whiteTime,
+		BlackTime:      blackTime,
+		WhiteIncrement: whiteIncrement,
+		BlackIncrement: blackIncremenent,
+
+		Conn: conn,
+		done: make(chan bool),
 	}
-	gm.sessions[gameID] = session
-	return gameID, nil
+
+	m.mu.Lock()
+	m.sessions[sessionID] = session
+	m.mu.Unlock()
+
+	// Start sending periodic clock updates?
+	go session.startClockTicker()
+
+	return session
 }
 
-func (gm *SimpleManager) MakeMove(gameID, move string) (*GameState, error) {
-	gm.mu.Lock()
-	session, ok := gm.sessions[gameID]
-	gm.mu.Unlock()
-	if !ok {
-		return nil, errors.New("game not found")
-	}
-
-	if err := session.HandleMove(move); err != nil {
-		return nil, err
-	}
-	return &GameState{
-		BoardFEN:    session.BoardFEN,
-		WhiteTime:   session.WhiteTime,
-		BlackTime:   session.BlackTime,
-		CurrentTurn: session.CurrentTurn,
-		IsCheckmate: session.IsCheckmate,
-		IsDraw:      session.IsDraw,
-	}, nil
+// GetSession returns a session by ID
+func (m *Manager) GetSession(id uuid.UUID) (*GameSession, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	session, ok := m.sessions[id]
+	return session, ok
 }
 
-func GetNow() time.Time {
-	// this is a hook for test or production
-	return time.Now()
+// RemoveSession cleans up a finished session
+func (m *Manager) RemoveSession(id uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, id)
 }
