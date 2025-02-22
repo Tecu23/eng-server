@@ -12,8 +12,11 @@ type InboundMessage struct {
 // StartNewGamePayload represents the payload for creating a new game
 type StartNewGamePayload struct {
 	TimeControl struct {
-		Initial   int `json:"initial"`
-		Increment int `json:"increment"`
+		WhiteTime      int64 `json:"white_time"`
+		BlackTime      int64 `json:"black_time"`
+		WhiteIncrement int64 `json:"white_increment"`
+		BlackIncrement int64 `json:"black_increment"`
+		MovesToGo      int64 `json:"moves_to_go"`
 	} `json:"time_control"`
 	Color string `json:"color"`
 }

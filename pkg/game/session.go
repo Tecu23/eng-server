@@ -5,13 +5,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/tecu23/eng-server/pkg/engine"
 )
 
 type GameSession struct {
-	ID string
+	ID uuid.UUID
+
+	Engine *engine.UCIEngine
 
 	Turn string
 
@@ -24,13 +27,9 @@ type GameSession struct {
 	WhiteIncrement int64
 	BlackIncrement int64
 
-	MovesToGo int64
-
 	lastMoveTime time.Time
 
 	Conn *websocket.Conn
-
-	Engine *engine.UCIEngine
 
 	done chan bool
 

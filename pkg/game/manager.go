@@ -14,7 +14,7 @@ type Manager struct {
 	mu       sync.RWMutex
 }
 
-// NewSimpleManager creates a new manager with in-memory storage
+// NewManager creates a new manager with in-memory storage
 func NewManager() *Manager {
 	return &Manager{
 		sessions: make(map[uuid.UUID]*GameSession),
@@ -25,10 +25,13 @@ func NewManager() *Manager {
 func (m *Manager) CreateSession(
 	conn *websocket.Conn,
 	whiteTime, blackTime, whiteIncrement, blackIncremenent int64,
-) *GameSession {
+) (*GameSession, error) {
 	sessionID := uuid.New()
 
-	eng := engine.NewUCIEngine()
+	eng, err := engine.NewUCIEngine("/bin/argo")
+	if err != nil {
+		return nil, err
+	}
 
 	session := &GameSession{
 		ID: sessionID,
@@ -54,7 +57,7 @@ func (m *Manager) CreateSession(
 	// Start sending periodic clock updates?
 	go session.startClockTicker()
 
-	return session
+	return session, nil
 }
 
 // GetSession returns a session by ID

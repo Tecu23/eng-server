@@ -9,11 +9,14 @@ import (
 	"github.com/tecu23/eng-server/pkg/messages"
 )
 
+// InboundHubMessage are the messages that the hub receives
 type InboundHubMessage struct {
 	Conn    *Connection             // who sent it
 	Message messages.InboundMessage // raw JSON or text
 }
 
+// Hub should keep track of all active connection. Also be responsible of registering/unregistering connections
+// Messages come from the inbound channel and are redirected to the corrected game session or broadcast
 type Hub struct {
 	mu          sync.RWMutex         // Mutex to protect direct access to the connections map.
 	connections map[*Connection]bool // Registered connections
@@ -22,22 +25,24 @@ type Hub struct {
 	unregister chan *Connection       // Incoming unregistration
 	inbound    chan InboundHubMessage // Channel or inbound messages that the hub might route or broadcast
 
-	// broadcast chan []byte // Channel to broadcast to everyone
+	broadcast chan []byte // Channel to broadcast to everyone
 
-	gameManager *game.SimpleManager
+	gameManager *game.Manager
 }
 
-func NewHub(gm *game.SimpleManager) *Hub {
+// NewHub creates a new hub
+func NewHub(gm *game.Manager) *Hub {
 	return &Hub{
 		connections: make(map[*Connection]bool),
 		register:    make(chan *Connection),
 		unregister:  make(chan *Connection),
 		inbound:     make(chan InboundHubMessage),
-		// broadcast:    make(chan []byte),
+		broadcast:   make(chan []byte),
 		gameManager: gm,
 	}
 }
 
+// Run is the main execution of the hub
 func (h *Hub) Run() {
 	for {
 		select {
@@ -89,21 +94,20 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			return
 		}
 
-		gameID, err := h.gameManager.CreateGameSession(payload)
-		if err != nil {
-			h.sendError(msg.Conn, err.Error())
-			return
-		}
+		// gameID, err := h.gameManager.CreateSession(
+		// 	payload.TimeControl.WhiteTime,
+		// 	payload.TimeControl.BlackTime,
+		// 	payload.TimeControl.WhiteIncrement,
+		// 	payload.TimeControl.BlackIncrement,
+		// )
+		// if err != nil {
+		// 	h.sendError(msg.Conn, err.Error())
+		// 	return
+		// }
 
 		resp := messages.OutboundMessage{
-			Type: "GAME_CREATED",
-			Payload: messages.GameCreatedPayload{
-				GameID:      gameID,
-				InitialFEN:  "startpos",
-				WhiteTime:   30000,
-				BlackTime:   30000,
-				CurrentTurn: "white",
-			},
+			Type:    "GAME_CREATED",
+			Payload: messages.GameCreatedPayload{},
 		}
 
 		msg.Conn.SendJSON(resp)
@@ -113,25 +117,25 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			h.sendError(msg.Conn, "Invalid MAKE_MOVE payload")
 			return
 		}
-		state, err := h.gameManager.MakeMove(payload.GameID, payload.Move)
-		if err != nil {
-			h.sendError(msg.Conn, err.Error())
-			return
-		}
-		// Broadcast or just send to this connection:
-		resp := messages.OutboundMessage{
-			Type: "GAME_STATE",
-			Payload: messages.GameStatePayload{
-				GameID:      payload.GameID,
-				BoardFEN:    state.BoardFEN,
-				WhiteTime:   state.WhiteTime,
-				BlackTime:   state.BlackTime,
-				CurrentTurn: state.CurrentTurn,
-				IsCheckmate: state.IsCheckmate,
-				IsDraw:      state.IsDraw,
-			},
-		}
-		msg.Conn.SendJSON(resp)
+		// state, err := h.gameManager.MakeMove(payload.GameID, payload.Move)
+		// if err != nil {
+		// 	h.sendError(msg.Conn, err.Error())
+		// 	return
+		// }
+		// // Broadcast or just send to this connection:
+		// resp := messages.OutboundMessage{
+		// 	Type: "GAME_STATE",
+		// 	Payload: messages.GameStatePayload{
+		// 		GameID:      payload.GameID,
+		// 		BoardFEN:    state.BoardFEN,
+		// 		WhiteTime:   state.WhiteTime,
+		// 		BlackTime:   state.BlackTime,
+		// 		CurrentTurn: state.CurrentTurn,
+		// 		IsCheckmate: state.IsCheckmate,
+		// 		IsDraw:      state.IsDraw,
+		// 	},
+		// }
+		// msg.Conn.SendJSON(resp)
 	default:
 		h.sendError(msg.Conn, "Unknown message type")
 	}

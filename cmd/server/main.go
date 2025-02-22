@@ -22,7 +22,7 @@ var upgrader = websocket.Upgrader{
 }
 
 func main() {
-	gm := game.NewSimpleManager()
+	gm := game.NewManager()
 
 	hub := server.NewHub(gm)
 	go hub.Run()
