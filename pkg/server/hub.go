@@ -87,7 +87,7 @@ func (h *Hub) unregisterConnection(conn *Connection) {
 func (h *Hub) handleInbound(msg InboundHubMessage) {
 	switch msg.Message.Type {
 	case "START_NEW_GAME":
-
+		fmt.Println(msg.Message.Payload)
 		var payload messages.StartNewGamePayload
 		if err := json.Unmarshal(msg.Message.Payload, &payload); err != nil {
 			h.sendError(msg.Conn, "Invalid START_NEW_GAME payload")

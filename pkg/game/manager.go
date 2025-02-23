@@ -1,3 +1,4 @@
+// Package game
 package game
 
 import (
