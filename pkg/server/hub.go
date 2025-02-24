@@ -70,7 +70,17 @@ func (h *Hub) registerConnection(conn *Connection) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.connections[conn] = true
-	fmt.Println("New connection registered!")
+	fmt.Println("New connection registered!", len(h.connections))
+
+	var payload messages.ConnectedPayload
+	payload.ConnectionId = conn.ID.String()
+
+	msg := messages.OutboundMessage{
+		Event:   "CONNECTED",
+		Payload: payload,
+	}
+
+	h.sendMessage(conn, msg)
 }
 
 func (h *Hub) unregisterConnection(conn *Connection) {
@@ -79,35 +89,44 @@ func (h *Hub) unregisterConnection(conn *Connection) {
 	if _, ok := h.connections[conn]; ok {
 		delete(h.connections, conn)
 		close(conn.send)
-		fmt.Println("Connection unregistered!")
+		fmt.Println("Connection unregistered!", len(h.connections))
 	}
 }
 
 // handleInbound is where you decode or route the message from a client.
 func (h *Hub) handleInbound(msg InboundHubMessage) {
-	switch msg.Message.Type {
-	case "START_NEW_GAME":
-		fmt.Println(msg.Message.Payload)
-		var payload messages.StartNewGamePayload
+	switch msg.Message.Event {
+	case "CREATE_SESSION":
+		var payload messages.CreateSession
 		if err := json.Unmarshal(msg.Message.Payload, &payload); err != nil {
 			h.sendError(msg.Conn, "Invalid START_NEW_GAME payload")
 			return
 		}
+		fmt.Println(payload)
 
-		// gameID, err := h.gameManager.CreateSession(
-		// 	payload.TimeControl.WhiteTime,
-		// 	payload.TimeControl.BlackTime,
-		// 	payload.TimeControl.WhiteIncrement,
-		// 	payload.TimeControl.BlackIncrement,
-		// )
-		// if err != nil {
-		// 	h.sendError(msg.Conn, err.Error())
-		// 	return
-		// }
+		gameSession, err := h.gameManager.CreateSession(
+			msg.Conn.ws,
+			payload.TimeControl.WhiteTime,
+			payload.TimeControl.BlackTime,
+			payload.TimeControl.WhiteIncrement,
+			payload.TimeControl.BlackIncrement,
+			payload.Color,
+			payload.InitialFen,
+		)
+		if err != nil {
+			h.sendError(msg.Conn, err.Error())
+			return
+		}
 
 		resp := messages.OutboundMessage{
-			Type:    "GAME_CREATED",
-			Payload: messages.GameCreatedPayload{},
+			Event: "GAME_CREATED",
+			Payload: messages.GameCreatedPayload{
+				GameID:      gameSession.ID.String(),
+				InitialFEN:  gameSession.FEN,
+				WhiteTime:   gameSession.WhiteTime,
+				BlackTime:   gameSession.BlackTime,
+				CurrentTurn: gameSession.Turn,
+			},
 		}
 
 		msg.Conn.SendJSON(resp)
@@ -143,10 +162,14 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 
 func (h *Hub) sendError(conn *Connection, msg string) {
 	resp := messages.OutboundMessage{
-		Type: "ERROR",
+		Event: "ERROR",
 		Payload: messages.ErrorPayload{
 			Message: msg,
 		},
 	}
-	conn.SendJSON(resp)
+	h.sendMessage(conn, resp)
+}
+
+func (h *Hub) sendMessage(conn *Connection, msg messages.OutboundMessage) {
+	conn.SendJSON(msg)
 }

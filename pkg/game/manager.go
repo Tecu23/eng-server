@@ -3,6 +3,7 @@ package game
 
 import (
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -26,10 +27,12 @@ func NewManager() *Manager {
 func (m *Manager) CreateSession(
 	conn *websocket.Conn,
 	whiteTime, blackTime, whiteIncrement, blackIncremenent int64,
+	turn string,
+	fen string,
 ) (*GameSession, error) {
 	sessionID := uuid.New()
 
-	eng, err := engine.NewUCIEngine("/bin/argo")
+	eng, err := engine.NewUCIEngine("./bin/argo_linux_amd64")
 	if err != nil {
 		return nil, err
 	}
@@ -39,8 +42,10 @@ func (m *Manager) CreateSession(
 
 		Engine: eng,
 
-		Turn: "white",
-		FEN:  "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+		Turn: turn,
+		FEN:  fen,
+
+		lastMoveTime: time.Now(),
 
 		WhiteTime:      whiteTime,
 		BlackTime:      blackTime,

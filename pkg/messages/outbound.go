@@ -3,8 +3,12 @@ package messages
 // OutboundMessage is how we wrap responses before sending
 // them to the client
 type OutboundMessage struct {
-	Type    string      `json:"type"`
+	Event   string      `json:"event"`
 	Payload interface{} `json:"payload"`
+}
+
+type ConnectedPayload struct {
+	ConnectionId string `json:"connection_id"`
 }
 
 // GameCreatedPayload represents the payload after a create game event
@@ -14,6 +18,11 @@ type GameCreatedPayload struct {
 	WhiteTime   int64  `json:"white_time"`
 	BlackTime   int64  `json:"black_time"`
 	CurrentTurn string `json:"current_turn"`
+}
+
+type TimeUpdatePayload struct {
+	Color     string `json:"color"`
+	Remaining int64  `json:"remaining"`
 }
 
 // GameStatePayload represents the payload returned after updating the game state

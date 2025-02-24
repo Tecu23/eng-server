@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/tecu23/eng-server/pkg/engine"
+	"github.com/tecu23/eng-server/pkg/messages"
 )
 
 type GameSession struct {
@@ -66,10 +67,13 @@ func (s *GameSession) updateClock() {
 
 	// Send a clock update to the client.
 	if s.Conn != nil {
+		var payload messages.TimeUpdatePayload
+		payload.Remaining = remainingTime
+		payload.Color = s.Turn
+
 		updateMsg := map[string]interface{}{
-			"type":      "clock_update",
-			"turn":      s.Turn,
-			"remaining": remainingTime,
+			"event":   "CLOCK_UPDATE",
+			"payload": payload,
 		}
 		s.Conn.WriteJSON(updateMsg)
 	}
@@ -88,7 +92,7 @@ func (s *GameSession) handleTimeout() {
 	}
 
 	var result string
-	if s.Turn == "white" {
+	if s.Turn == "w" {
 		result = "Black wins on time"
 	} else {
 		result = "White wins on time"
@@ -96,7 +100,7 @@ func (s *GameSession) handleTimeout() {
 
 	if s.Conn != nil {
 		s.Conn.WriteJSON(map[string]interface{}{
-			"type":   "game_over",
+			"event":  "GAME_OVER",
 			"reason": result,
 		})
 	}
@@ -132,9 +136,9 @@ func (s *GameSession) ProcessMove(move string) error {
 	// Inform the client about the move and the turn change.
 	if s.Conn != nil {
 		s.Conn.WriteJSON(map[string]interface{}{
-			"type": "move",
-			"move": move,
-			"turn": s.Turn,
+			"event": "ENGINE_MOVE",
+			"move":  move,
+			"turn":  s.Turn,
 		})
 	}
 

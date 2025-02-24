@@ -2,14 +2,17 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/tecu23/eng-server/pkg/messages"
 )
 
 type Connection struct {
+	ID   uuid.UUID
 	ws   *websocket.Conn // The underlying Websocket connection
 	hub  *Hub
 	send chan []byte // Buffered channel of outbound messages.
@@ -17,6 +20,7 @@ type Connection struct {
 
 func NewConnection(ws *websocket.Conn, hub *Hub) *Connection {
 	return &Connection{
+		ID:   uuid.New(),
 		ws:   ws,
 		hub:  hub,
 		send: make(chan []byte, 256), // buffer3ed for outgoing messages
@@ -41,6 +45,7 @@ func (c *Connection) ReadPump() {
 		if msgType == websocket.TextMessage {
 			var inbound messages.InboundMessage
 			if err := json.Unmarshal(msg, &inbound); err == nil {
+				fmt.Println(inbound)
 				c.hub.inbound <- InboundHubMessage{
 					Conn:    c,
 					Message: inbound,
