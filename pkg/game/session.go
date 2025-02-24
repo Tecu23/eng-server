@@ -2,6 +2,7 @@ package game
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,12 +120,12 @@ func (s *GameSession) ProcessMove(move string) error {
 	elapsed := time.Since(s.lastMoveTime).Milliseconds()
 
 	// Update the clock for the active player.
-	if s.Turn == "white" {
+	if s.Turn == "w" {
 		s.WhiteTime = s.WhiteTime - elapsed + s.WhiteIncrement
-		s.Turn = "black" // Switch turn.
+		s.Turn = "b" // Switch turn.
 	} else {
 		s.BlackTime = s.BlackTime - elapsed + s.BlackIncrement
-		s.Turn = "white"
+		s.Turn = "w"
 	}
 
 	// Record the move.
@@ -133,27 +134,29 @@ func (s *GameSession) ProcessMove(move string) error {
 	// Reset the timer for the new move.
 	s.lastMoveTime = time.Now()
 
-	// Inform the client about the move and the turn change.
-	if s.Conn != nil {
-		s.Conn.WriteJSON(map[string]interface{}{
-			"event": "ENGINE_MOVE",
-			"move":  move,
-			"turn":  s.Turn,
-		})
-	}
-
 	return nil
 }
 
 func (s *GameSession) ProcessEngineMove() {
 	s.mu.Lock()
-	availableTime := s.BlackTime - time.Since(s.lastMoveTime).Milliseconds()
-	if availableTime < 0 {
-		availableTime = 0
-	}
+	blackTime := s.BlackTime
+	whiteTime := s.WhiteTime
+	movestogo := len(s.Moves) / 2
+	moves := s.Moves
+	fen := s.FEN
+	conn := s.Conn
+	turn := s.Turn
 	s.mu.Unlock()
 
-	command := fmt.Sprintf("go movetime %d", availableTime)
+	command := fmt.Sprintf("position fen %s moves %s", fen, strings.Join(moves, " "))
+	fmt.Println(command)
+	if err := s.Engine.SendCommand(command); err != nil {
+		// Handle error
+		return
+	}
+
+	command = fmt.Sprintf("go wtime %d btime %d movestogo %d", whiteTime, blackTime, 40-movestogo)
+	fmt.Println(command, movestogo)
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
 		return
@@ -164,4 +167,16 @@ func (s *GameSession) ProcessEngineMove() {
 
 	// Process the move as if the engine made it.
 	s.ProcessMove(bestMove)
+
+	// Inform the client about the move and the turn change.
+	if conn != nil {
+		var payload messages.EngineMovePayload
+		payload.Move = bestMove
+		payload.Color = turn
+
+		conn.WriteJSON(map[string]interface{}{
+			"event":   "ENGINE_MOVE",
+			"payload": payload,
+		})
+	}
 }

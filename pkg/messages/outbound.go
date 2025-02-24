@@ -39,3 +39,8 @@ type GameStatePayload struct {
 type ErrorPayload struct {
 	Message string `json:"message"`
 }
+
+type EngineMovePayload struct {
+	Move  string `json:"move"`
+	Color string `json:"color"`
+}

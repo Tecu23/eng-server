@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/tecu23/eng-server/pkg/game"
 	"github.com/tecu23/eng-server/pkg/messages"
 )
@@ -12,7 +14,7 @@ import (
 // InboundHubMessage are the messages that the hub receives
 type InboundHubMessage struct {
 	Conn    *Connection             // who sent it
-	Message messages.InboundMessage // raw JSON or text
+	Message messages.InboundMessage // raw JSON or texthub
 }
 
 // Hub should keep track of all active connection. Also be responsible of registering/unregistering connections
@@ -136,25 +138,44 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			h.sendError(msg.Conn, "Invalid MAKE_MOVE payload")
 			return
 		}
-		// state, err := h.gameManager.MakeMove(payload.GameID, payload.Move)
-		// if err != nil {
-		// 	h.sendError(msg.Conn, err.Error())
-		// 	return
-		// }
-		// // Broadcast or just send to this connection:
-		// resp := messages.OutboundMessage{
-		// 	Type: "GAME_STATE",
-		// 	Payload: messages.GameStatePayload{
-		// 		GameID:      payload.GameID,
-		// 		BoardFEN:    state.BoardFEN,
-		// 		WhiteTime:   state.WhiteTime,
-		// 		BlackTime:   state.BlackTime,
-		// 		CurrentTurn: state.CurrentTurn,
-		// 		IsCheckmate: state.IsCheckmate,
-		// 		IsDraw:      state.IsDraw,
-		// 	},
-		// }
-		// msg.Conn.SendJSON(resp)
+
+		id, err := uuid.Parse(payload.GameID)
+		if err != nil {
+			h.sendError(msg.Conn, err.Error())
+			return
+		}
+
+		session, ok := h.gameManager.GetSession(id)
+		if !ok {
+			h.sendError(
+				msg.Conn,
+				fmt.Sprintf("Could not find session with session id %s", payload.GameID),
+			)
+			return
+		}
+
+		err = session.ProcessMove(payload.Move)
+		if err != nil {
+			h.sendError(msg.Conn, err.Error())
+			return
+		}
+
+		resp := messages.OutboundMessage{
+			Event: "GAME_STATE",
+			Payload: messages.GameStatePayload{
+				GameID:      session.ID.String(),
+				BoardFEN:    session.FEN,
+				WhiteTime:   session.WhiteTime,
+				BlackTime:   session.BlackTime,
+				CurrentTurn: session.Turn,
+			},
+		}
+
+		msg.Conn.SendJSON(resp)
+
+		// Call engine to make an engine move as well
+		session.ProcessEngineMove()
+
 	default:
 		h.sendError(msg.Conn, "Unknown message type")
 	}
