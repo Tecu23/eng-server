@@ -69,14 +69,15 @@ func (s *GameSession) updateClock() {
 	// Send a clock update to the client.
 	if s.Conn != nil {
 		var payload messages.TimeUpdatePayload
+		var timeUpdateMsg messages.OutboundMessage
+
 		payload.Remaining = remainingTime
 		payload.Color = s.Turn
 
-		updateMsg := map[string]interface{}{
-			"event":   "CLOCK_UPDATE",
-			"payload": payload,
-		}
-		s.Conn.WriteJSON(updateMsg)
+		timeUpdateMsg.Event = "CLOCK_UPDATE"
+		timeUpdateMsg.Payload = payload
+
+		s.SendJson(timeUpdateMsg)
 	}
 
 	// If the clock reaches zero, handle the timeout.
@@ -100,10 +101,15 @@ func (s *GameSession) handleTimeout() {
 	}
 
 	if s.Conn != nil {
-		s.Conn.WriteJSON(map[string]interface{}{
-			"event":  "GAME_OVER",
-			"reason": result,
-		})
+		var payload messages.GameOverPayload
+		var gameOverMsg messages.OutboundMessage
+
+		payload.Reason = result
+
+		gameOverMsg.Event = "GAME_OVER"
+		gameOverMsg.Payload = payload
+
+		s.SendJson(gameOverMsg)
 	}
 
 	// Optionally shut down the engine if one was running.
@@ -139,24 +145,22 @@ func (s *GameSession) ProcessMove(move string) error {
 
 func (s *GameSession) ProcessEngineMove() {
 	s.mu.Lock()
-	blackTime := s.BlackTime
-	whiteTime := s.WhiteTime
-	movestogo := len(s.Moves) / 2
-	moves := s.Moves
-	fen := s.FEN
-	conn := s.Conn
-	turn := s.Turn
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
-	command := fmt.Sprintf("position fen %s moves %s", fen, strings.Join(moves, " "))
-	fmt.Println(command)
+	command := fmt.Sprintf("position fen %s moves %s", s.FEN, strings.Join(s.Moves, " "))
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
 		return
 	}
 
-	command = fmt.Sprintf("go wtime %d btime %d movestogo %d", whiteTime, blackTime, 40-movestogo)
-	fmt.Println(command, movestogo)
+	movestogo := len(s.Moves) / 2
+
+	command = fmt.Sprintf(
+		"go wtime %d btime %d movestogo %d",
+		s.WhiteTime,
+		s.BlackTime,
+		40-movestogo,
+	)
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
 		return
@@ -169,14 +173,20 @@ func (s *GameSession) ProcessEngineMove() {
 	s.ProcessMove(bestMove)
 
 	// Inform the client about the move and the turn change.
-	if conn != nil {
+	if s.Conn != nil {
 		var payload messages.EngineMovePayload
-		payload.Move = bestMove
-		payload.Color = turn
+		var engineMoveMsg messages.OutboundMessage
 
-		conn.WriteJSON(map[string]interface{}{
-			"event":   "ENGINE_MOVE",
-			"payload": payload,
-		})
+		payload.Move = bestMove
+		payload.Color = s.Turn
+
+		engineMoveMsg.Event = "ENGINE_MOVE"
+		engineMoveMsg.Payload = payload
+
+		s.SendJson(engineMoveMsg)
 	}
+}
+
+func (s *GameSession) SendJson(msg messages.OutboundMessage) error {
+	return s.Conn.WriteJSON(msg)
 }

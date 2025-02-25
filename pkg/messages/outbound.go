@@ -20,6 +20,10 @@ type GameCreatedPayload struct {
 	CurrentTurn string `json:"current_turn"`
 }
 
+type GameOverPayload struct {
+	Reason string `json:"reason"`
+}
+
 type TimeUpdatePayload struct {
 	Color     string `json:"color"`
 	Remaining int64  `json:"remaining"`

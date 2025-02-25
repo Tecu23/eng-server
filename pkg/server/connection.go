@@ -2,8 +2,8 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -12,10 +12,11 @@ import (
 )
 
 type Connection struct {
-	ID   uuid.UUID
-	ws   *websocket.Conn // The underlying Websocket connection
-	hub  *Hub
-	send chan []byte // Buffered channel of outbound messages.
+	ID      uuid.UUID
+	ws      *websocket.Conn // The underlying Websocket connection
+	hub     *Hub
+	send    chan []byte // Buffered channel of outbound messages.
+	writeMu sync.Mutex  // Mutex to protect concurrent writes to ws.
 }
 
 func NewConnection(ws *websocket.Conn, hub *Hub) *Connection {
@@ -45,7 +46,6 @@ func (c *Connection) ReadPump() {
 		if msgType == websocket.TextMessage {
 			var inbound messages.InboundMessage
 			if err := json.Unmarshal(msg, &inbound); err == nil {
-				fmt.Println(inbound)
 				c.hub.inbound <- InboundHubMessage{
 					Conn:    c,
 					Message: inbound,
@@ -70,7 +70,10 @@ func (c *Connection) WritePump() {
 			log.Println("send channel closed for connection")
 			return
 		}
+		c.writeMu.Lock()
 		err := c.ws.WriteMessage(websocket.TextMessage, message)
+		c.writeMu.Unlock()
+
 		if err != nil {
 			log.Println("write error:", err)
 			return

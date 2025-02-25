@@ -104,7 +104,6 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			h.sendError(msg.Conn, "Invalid START_NEW_GAME payload")
 			return
 		}
-		fmt.Println(payload)
 
 		gameSession, err := h.gameManager.CreateSession(
 			msg.Conn.ws,
@@ -131,7 +130,7 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			},
 		}
 
-		msg.Conn.SendJSON(resp)
+		h.sendMessage(msg.Conn, resp)
 	case "MAKE_MOVE":
 		var payload messages.MakeMovePayload
 		if err := json.Unmarshal(msg.Message.Payload, &payload); err != nil {
@@ -171,7 +170,7 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			},
 		}
 
-		msg.Conn.SendJSON(resp)
+		h.sendMessage(msg.Conn, resp)
 
 		// Call engine to make an engine move as well
 		session.ProcessEngineMove()
