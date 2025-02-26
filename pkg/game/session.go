@@ -35,7 +35,8 @@ type GameSession struct {
 
 	done chan bool
 
-	mu sync.Mutex
+	mu      sync.Mutex
+	writeMu sync.Mutex
 }
 
 func (s *GameSession) startClockTicker() {
@@ -60,7 +61,7 @@ func (s *GameSession) updateClock() {
 	var remainingTime int64
 
 	// Determine which clock to update based on whose turn it is.
-	if s.Turn == "white" {
+	if s.Turn == "w" {
 		remainingTime = s.WhiteTime - elapsed
 	} else {
 		remainingTime = s.BlackTime - elapsed
@@ -77,7 +78,7 @@ func (s *GameSession) updateClock() {
 		timeUpdateMsg.Event = "CLOCK_UPDATE"
 		timeUpdateMsg.Payload = payload
 
-		s.SendJson(timeUpdateMsg)
+		s.SendJSON(timeUpdateMsg)
 	}
 
 	// If the clock reaches zero, handle the timeout.
@@ -109,7 +110,7 @@ func (s *GameSession) handleTimeout() {
 		gameOverMsg.Event = "GAME_OVER"
 		gameOverMsg.Payload = payload
 
-		s.SendJson(gameOverMsg)
+		s.SendJSON(gameOverMsg)
 	}
 
 	// Optionally shut down the engine if one was running.
@@ -145,20 +146,21 @@ func (s *GameSession) ProcessMove(move string) error {
 
 func (s *GameSession) ProcessEngineMove() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	wTime, bTime, mvs, fen, turn := s.WhiteTime, s.BlackTime, s.Moves, s.FEN, s.Turn
+	s.mu.Unlock()
 
-	command := fmt.Sprintf("position fen %s moves %s", s.FEN, strings.Join(s.Moves, " "))
+	command := fmt.Sprintf("position fen %s moves %s", fen, strings.Join(mvs, " "))
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
 		return
 	}
 
-	movestogo := len(s.Moves) / 2
+	movestogo := len(mvs) / 2
 
 	command = fmt.Sprintf(
 		"go wtime %d btime %d movestogo %d",
-		s.WhiteTime,
-		s.BlackTime,
+		wTime,
+		bTime,
 		40-movestogo,
 	)
 	if err := s.Engine.SendCommand(command); err != nil {
@@ -178,15 +180,17 @@ func (s *GameSession) ProcessEngineMove() {
 		var engineMoveMsg messages.OutboundMessage
 
 		payload.Move = bestMove
-		payload.Color = s.Turn
+		payload.Color = turn
 
 		engineMoveMsg.Event = "ENGINE_MOVE"
 		engineMoveMsg.Payload = payload
 
-		s.SendJson(engineMoveMsg)
+		s.SendJSON(engineMoveMsg)
 	}
 }
 
-func (s *GameSession) SendJson(msg messages.OutboundMessage) error {
+func (s *GameSession) SendJSON(msg messages.OutboundMessage) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.Conn.WriteJSON(msg)
 }

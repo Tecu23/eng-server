@@ -73,7 +73,6 @@ func (c *Connection) WritePump() {
 		c.writeMu.Lock()
 		err := c.ws.WriteMessage(websocket.TextMessage, message)
 		c.writeMu.Unlock()
-
 		if err != nil {
 			log.Println("write error:", err)
 			return
