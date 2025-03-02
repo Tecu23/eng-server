@@ -2,11 +2,11 @@ package server
 
 import (
 	"encoding/json"
-	"log"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 
 	"github.com/tecu23/eng-server/pkg/messages"
 )
@@ -17,14 +17,17 @@ type Connection struct {
 	hub     *Hub
 	send    chan []byte // Buffered channel of outbound messages.
 	writeMu sync.Mutex  // Mutex to protect concurrent writes to ws.
+
+	logger *zap.Logger
 }
 
-func NewConnection(ws *websocket.Conn, hub *Hub) *Connection {
+func NewConnection(ws *websocket.Conn, hub *Hub, logger *zap.Logger) *Connection {
 	return &Connection{
-		ID:   uuid.New(),
-		ws:   ws,
-		hub:  hub,
-		send: make(chan []byte, 256), // buffer3ed for outgoing messages
+		ID:     uuid.New(),
+		ws:     ws,
+		hub:    hub,
+		send:   make(chan []byte, 256), // buffer3ed for outgoing messages
+		logger: logger,
 	}
 }
 
@@ -38,7 +41,7 @@ func (c *Connection) ReadPump() {
 	for {
 		msgType, msg, err := c.ws.ReadMessage()
 		if err != nil {
-			log.Println("read error:", err)
+			c.logger.Error("read error", zap.Error(err))
 			break
 		}
 
@@ -51,7 +54,7 @@ func (c *Connection) ReadPump() {
 					Message: inbound,
 				}
 			} else {
-				log.Println("Failed to parse inbound JSON:", err)
+				c.logger.Error("Failed to parse inbound JSON", zap.Error(err))
 			}
 		}
 	}
@@ -67,14 +70,17 @@ func (c *Connection) WritePump() {
 		message, ok := <-c.send
 		if !ok {
 			// Channel closed
-			log.Println("send channel closed for connection")
+			c.logger.Info(
+				"Send channel closed for connection",
+				zap.String("connection_id", c.ID.String()),
+			)
 			return
 		}
 		c.writeMu.Lock()
 		err := c.ws.WriteMessage(websocket.TextMessage, message)
 		c.writeMu.Unlock()
 		if err != nil {
-			log.Println("write error:", err)
+			c.logger.Error("write error", zap.Error(err))
 			return
 		}
 	}
@@ -84,7 +90,7 @@ func (c *Connection) WritePump() {
 func (c *Connection) SendJSON(v interface{}) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		log.Println("Error marshaling JSON:", err)
+		c.logger.Error("Error marshaling JSON", zap.Error(err))
 		return
 	}
 

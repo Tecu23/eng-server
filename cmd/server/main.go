@@ -2,12 +2,15 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
+	"github.com/tecu23/eng-server/pkg/config"
 	"github.com/tecu23/eng-server/pkg/game"
 	"github.com/tecu23/eng-server/pkg/server"
 )
@@ -21,11 +24,36 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func main() {
-	gm := game.NewManager()
+// App encapsulates global dependencies
+type application struct {
+	Logger *zap.Logger
+	Config *config.Config
+	Hub    *server.Hub
+}
 
-	hub := server.NewHub(gm)
-	go hub.Run()
+func main() {
+	debug := flag.Bool("debug", false, "enable debug logging")
+	port := flag.String("port", "8080", "server port")
+	flag.Parse()
+
+	config := &config.Config{
+		Debug: *debug,
+		Port:  *port,
+	}
+
+	logger := initLogger(config.Debug)
+	defer logger.Sync()
+
+	gm := game.NewManager()
+	hub := server.NewHub(gm, logger)
+
+	app := &application{
+		Logger: logger,
+		Config: config,
+		Hub:    hub,
+	}
+
+	go app.Hub.Run()
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "Server is up and running!")
@@ -34,19 +62,37 @@ func main() {
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Println("Error upgrading to websocket:", err)
+			app.Logger.Error("Error upgrading to websocket:", zap.Error(err))
 			return
 		}
 
-		conn := server.NewConnection(ws, hub)
-		hub.Register(conn)
+		conn := server.NewConnection(ws, hub, app.Logger)
+		app.Hub.Register(conn)
 
 		go conn.WritePump()
 		go conn.ReadPump()
 	})
 
-	log.Println("Starting serve on :8080...")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatal("ListenAndServe error:", err)
+	app.Logger.Info("Starting server", zap.String("address", ":"+app.Config.Port))
+	if err := http.ListenAndServe(":"+app.Config.Port, nil); err != nil {
+		app.Logger.Fatal("ListenAndServe error", zap.Error(err))
 	}
+}
+
+func initLogger(debug bool) *zap.Logger {
+	var cfg zap.Config
+	if debug {
+		cfg = zap.NewDevelopmentConfig()
+		cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+	} else {
+		cfg = zap.NewProductionConfig()
+		cfg.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+	}
+
+	logger, err := cfg.Build()
+	if err != nil {
+		panic("Failed to initialize logger: " + err.Error())
+	}
+
+	return logger
 }

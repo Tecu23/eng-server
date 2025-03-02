@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/tecu23/eng-server/pkg/game"
 	"github.com/tecu23/eng-server/pkg/messages"
@@ -30,10 +31,12 @@ type Hub struct {
 	broadcast chan []byte // Channel to broadcast to everyone
 
 	gameManager *game.Manager
+
+	logger *zap.Logger
 }
 
 // NewHub creates a new hub
-func NewHub(gm *game.Manager) *Hub {
+func NewHub(gm *game.Manager, logger *zap.Logger) *Hub {
 	return &Hub{
 		connections: make(map[*Connection]bool),
 		register:    make(chan *Connection),
@@ -41,6 +44,7 @@ func NewHub(gm *game.Manager) *Hub {
 		inbound:     make(chan InboundHubMessage),
 		broadcast:   make(chan []byte),
 		gameManager: gm,
+		logger:      logger,
 	}
 }
 
@@ -72,7 +76,7 @@ func (h *Hub) registerConnection(conn *Connection) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.connections[conn] = true
-	fmt.Println("New connection registered!", len(h.connections))
+	h.logger.Info("New connection registered", zap.Int("total_connections", len(h.connections)))
 
 	var payload messages.ConnectedPayload
 	payload.ConnectionId = conn.ID.String()
@@ -91,7 +95,8 @@ func (h *Hub) unregisterConnection(conn *Connection) {
 	if _, ok := h.connections[conn]; ok {
 		delete(h.connections, conn)
 		close(conn.send)
-		fmt.Println("Connection unregistered!", len(h.connections))
+		h.logger.Info("Connection unregistered", zap.Int("total_connections", len(h.connections)))
+
 	}
 }
 
@@ -101,6 +106,7 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 	case "CREATE_SESSION":
 		var payload messages.CreateSession
 		if err := json.Unmarshal(msg.Message.Payload, &payload); err != nil {
+			h.logger.Error("Invalid CREATE_SESSION payload", zap.Error(err))
 			h.sendError(msg.Conn, "Invalid START_NEW_GAME payload")
 			return
 		}
@@ -115,6 +121,7 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			payload.InitialFen,
 		)
 		if err != nil {
+			h.logger.Error("Error creating game session", zap.Error(err))
 			h.sendError(msg.Conn, err.Error())
 			return
 		}
@@ -130,22 +137,27 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			},
 		}
 
+		h.logger.Info("Game session created", zap.String("game_id", gameSession.ID.String()))
 		h.sendMessage(msg.Conn, resp)
+
 	case "MAKE_MOVE":
 		var payload messages.MakeMovePayload
 		if err := json.Unmarshal(msg.Message.Payload, &payload); err != nil {
+			h.logger.Error("Invalid MAKE_MOVE payload", zap.Error(err))
 			h.sendError(msg.Conn, "Invalid MAKE_MOVE payload")
 			return
 		}
 
 		id, err := uuid.Parse(payload.GameID)
 		if err != nil {
+			h.logger.Error("Could not parse game session id", zap.Error(err))
 			h.sendError(msg.Conn, err.Error())
 			return
 		}
 
 		session, ok := h.gameManager.GetSession(id)
 		if !ok {
+			h.logger.Error("Could not find session", zap.Error(err))
 			h.sendError(
 				msg.Conn,
 				fmt.Sprintf("Could not find session with session id %s", payload.GameID),
@@ -155,6 +167,7 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 
 		err = session.ProcessMove(payload.Move)
 		if err != nil {
+			h.logger.Error("Could not process move", zap.Error(err))
 			h.sendError(msg.Conn, err.Error())
 			return
 		}
@@ -170,12 +183,14 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			},
 		}
 
+		h.logger.Info("Game state updated", zap.String("game_id", session.ID.String()))
 		h.sendMessage(msg.Conn, resp)
 
 		// Call engine to make an engine move as well
 		session.ProcessEngineMove()
 
 	default:
+		h.logger.Warn("Unknown message type", zap.String("event", msg.Message.Event))
 		h.sendError(msg.Conn, "Unknown message type")
 	}
 }
