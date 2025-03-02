@@ -44,7 +44,7 @@ func main() {
 	logger := initLogger(config.Debug)
 	defer logger.Sync()
 
-	gm := game.NewManager()
+	gm := game.NewManager(logger)
 	hub := server.NewHub(gm, logger)
 
 	app := &application{

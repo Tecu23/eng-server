@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 
 	"github.com/tecu23/eng-server/pkg/engine"
 	"github.com/tecu23/eng-server/pkg/messages"
@@ -37,6 +38,8 @@ type GameSession struct {
 
 	mu      sync.Mutex
 	writeMu sync.Mutex
+
+	logger *zap.Logger
 }
 
 func (s *GameSession) startClockTicker() {
@@ -66,6 +69,12 @@ func (s *GameSession) updateClock() {
 	} else {
 		remainingTime = s.BlackTime - elapsed
 	}
+
+	s.logger.Debug(
+		"updating clock",
+		zap.String("turn", s.Turn),
+		zap.Int64("remaining_time", remainingTime),
+	)
 
 	// Send a clock update to the client.
 	if s.Conn != nil {
@@ -100,6 +109,8 @@ func (s *GameSession) handleTimeout() {
 	} else {
 		result = "White wins on time"
 	}
+
+	s.logger.Info("game over", zap.String("reason", result))
 
 	if s.Conn != nil {
 		var payload messages.GameOverPayload
@@ -141,6 +152,8 @@ func (s *GameSession) ProcessMove(move string) error {
 	// Reset the timer for the new move.
 	s.lastMoveTime = time.Now()
 
+	s.logger.Info("processed move", zap.String("move", move), zap.String("new_turn", s.Turn))
+
 	return nil
 }
 
@@ -152,6 +165,7 @@ func (s *GameSession) ProcessEngineMove() {
 	command := fmt.Sprintf("position fen %s moves %s", fen, strings.Join(mvs, " "))
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
+		s.logger.Error("engine command error", zap.Error(err))
 		return
 	}
 
@@ -165,6 +179,8 @@ func (s *GameSession) ProcessEngineMove() {
 	)
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
+		s.logger.Error("engine command error", zap.Error(err))
+
 		return
 	}
 
@@ -172,7 +188,10 @@ func (s *GameSession) ProcessEngineMove() {
 	bestMove := <-s.Engine.BestMoveChan
 
 	// Process the move as if the engine made it.
-	s.ProcessMove(bestMove)
+	if err := s.ProcessMove(bestMove); err != nil {
+		s.logger.Error("failed to process engine move", zap.Error(err))
+		return
+	}
 
 	// Inform the client about the move and the turn change.
 	if s.Conn != nil {
@@ -187,6 +206,8 @@ func (s *GameSession) ProcessEngineMove() {
 
 		s.SendJSON(engineMoveMsg)
 	}
+
+	s.logger.Info("engine move processed", zap.String("move", bestMove))
 }
 
 func (s *GameSession) SendJSON(msg messages.OutboundMessage) error {

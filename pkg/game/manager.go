@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 
 	"github.com/tecu23/eng-server/pkg/engine"
 )
@@ -14,12 +15,14 @@ import (
 type Manager struct {
 	sessions map[uuid.UUID]*GameSession
 	mu       sync.RWMutex
+	logger   *zap.Logger
 }
 
 // NewManager creates a new manager with in-memory storage
-func NewManager() *Manager {
+func NewManager(logger *zap.Logger) *Manager {
 	return &Manager{
 		sessions: make(map[uuid.UUID]*GameSession),
+		logger:   logger,
 	}
 }
 
@@ -34,6 +37,7 @@ func (m *Manager) CreateSession(
 
 	eng, err := engine.NewUCIEngine("./bin/argo_linux_amd64")
 	if err != nil {
+		m.logger.Error("failed to initialize engine", zap.Error(err))
 		return nil, err
 	}
 
@@ -52,13 +56,16 @@ func (m *Manager) CreateSession(
 		WhiteIncrement: whiteIncrement,
 		BlackIncrement: blackIncremenent,
 
-		Conn: conn,
-		done: make(chan bool),
+		Conn:   conn,
+		done:   make(chan bool),
+		logger: m.logger,
 	}
 
 	m.mu.Lock()
 	m.sessions[sessionID] = session
 	m.mu.Unlock()
+
+	m.logger.Info("created new game session", zap.String("session_id", sessionID.String()))
 
 	// Start sending periodic clock updates?
 	go session.startClockTicker()
@@ -79,4 +86,5 @@ func (m *Manager) RemoveSession(id uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.sessions, id)
+	m.logger.Info("removed game session", zap.String("session_id", id.String()))
 }
