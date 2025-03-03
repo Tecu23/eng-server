@@ -64,12 +64,9 @@ func (h *Hub) Run() {
 	}
 }
 
+// Register should
 func (h *Hub) Register(conn *Connection) {
 	h.register <- conn
-}
-
-func (h *Hub) Unregister(conn *Connection) {
-	h.unregister <- conn
 }
 
 func (h *Hub) registerConnection(conn *Connection) {
@@ -89,6 +86,11 @@ func (h *Hub) registerConnection(conn *Connection) {
 	h.sendMessage(conn, msg)
 }
 
+// Unregister should
+func (h *Hub) Unregister(conn *Connection) {
+	h.unregister <- conn
+}
+
 func (h *Hub) unregisterConnection(conn *Connection) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -100,7 +102,7 @@ func (h *Hub) unregisterConnection(conn *Connection) {
 	}
 }
 
-// handleInbound is where you decode or route the message from a client.
+// handleInbound is where the message from a client is decoded and handled
 func (h *Hub) handleInbound(msg InboundHubMessage) {
 	switch msg.Message.Event {
 	case "CREATE_SESSION":

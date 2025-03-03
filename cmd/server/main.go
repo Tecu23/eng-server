@@ -67,19 +67,7 @@ func main() {
 		fmt.Fprintln(w, "Server is up and running!")
 	})
 
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		ws, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			app.Logger.Error("Error upgrading to websocket:", zap.Error(err))
-			return
-		}
-
-		conn := server.NewConnection(ws, hub, app.Logger)
-		app.Hub.Register(conn)
-
-		go conn.WritePump()
-		go conn.ReadPump()
-	})
+	http.HandleFunc("/ws", app.authenticate(http.HandlerFunc(app.wsHandler)))
 
 	app.Logger.Info("Starting server", zap.String("address", ":"+app.Config.Port))
 	if err := http.ListenAndServe(":"+app.Config.Port, nil); err != nil {
@@ -103,4 +91,18 @@ func initLogger(debug bool) *zap.Logger {
 	}
 
 	return logger
+}
+
+func (app *application) wsHandler(w http.ResponseWriter, r *http.Request) {
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		app.Logger.Error("Error upgrading to websocket:", zap.Error(err))
+		return
+	}
+
+	conn := server.NewConnection(ws, app.Hub, app.Logger)
+	app.Hub.Register(conn)
+
+	go conn.WritePump()
+	go conn.ReadPump()
 }
