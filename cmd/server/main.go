@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -19,8 +21,9 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 
-	CheckOrigin: func(_ *http.Request) bool {
-		return true // Allow all connections for now
+	CheckOrigin: func(r *http.Request) bool {
+		path := os.Getenv("FRONTEND_PATH")
+		return path == r.Header.Get("Origin")
 	},
 }
 
@@ -54,6 +57,11 @@ func main() {
 	}
 
 	go app.Hub.Run()
+
+	err := godotenv.Load()
+	if err != nil {
+		app.Logger.Fatal("loading env error", zap.Error(err))
+	}
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "Server is up and running!")
