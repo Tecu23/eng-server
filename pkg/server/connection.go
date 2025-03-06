@@ -8,7 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
-	"github.com/tecu23/eng-server/pkg/messages"
+	"github.com/tecu23/eng-server/internal/messages"
 )
 
 type Connection struct {

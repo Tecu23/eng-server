@@ -3,12 +3,12 @@ package game
 
 import (
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
+	"github.com/tecu23/eng-server/pkg/chess"
 	"github.com/tecu23/eng-server/pkg/engine"
 )
 
@@ -30,7 +30,7 @@ func NewManager(logger *zap.Logger) *Manager {
 func (m *Manager) CreateSession(
 	conn *websocket.Conn,
 	whiteTime, blackTime, whiteIncrement, blackIncremenent int64,
-	turn string,
+	turn chess.Color,
 	fen string,
 ) (*GameSession, error) {
 	sessionID := uuid.New()
@@ -41,20 +41,25 @@ func (m *Manager) CreateSession(
 		return nil, err
 	}
 
+	tc := chess.TimeControl{
+		WhiteTime:       whiteTime,
+		WhiteIncrement:  whiteIncrement,
+		BlackTime:       blackTime,
+		BlackIncrement:  blackIncremenent,
+		MovesPerControl: 40,
+		TimingMethod:    chess.IncrementTiming,
+	}
+
+	clock := chess.NewClock(tc)
+
 	session := &GameSession{
 		ID: sessionID,
 
 		Engine: eng,
 
-		Turn: turn,
-		FEN:  fen,
-
-		lastMoveTime: time.Now(),
-
-		WhiteTime:      whiteTime,
-		BlackTime:      blackTime,
-		WhiteIncrement: whiteIncrement,
-		BlackIncrement: blackIncremenent,
+		Turn:  turn,
+		FEN:   fen,
+		Clock: clock,
 
 		Conn:   conn,
 		done:   make(chan bool),
@@ -67,8 +72,10 @@ func (m *Manager) CreateSession(
 
 	m.logger.Info("created new game session", zap.String("session_id", sessionID.String()))
 
-	// Start sending periodic clock updates?
-	go session.startClockTicker()
+	// Start sending periodic clock updates
+	go session.Clock.Start()
+	go session.StartClockUpdates()
+	go session.StartTimeoutMonitor()
 
 	return session, nil
 }

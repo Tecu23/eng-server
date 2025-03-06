@@ -8,8 +8,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/tecu23/eng-server/internal/messages"
+	"github.com/tecu23/eng-server/pkg/chess"
 	"github.com/tecu23/eng-server/pkg/game"
-	"github.com/tecu23/eng-server/pkg/messages"
 )
 
 // InboundHubMessage are the messages that the hub receives
@@ -113,13 +114,21 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			return
 		}
 
+		var clr chess.Color
+
+		if payload.Color == "w" {
+			clr = chess.White
+		} else {
+			clr = chess.Black
+		}
+
 		gameSession, err := h.gameManager.CreateSession(
 			msg.Conn.ws,
 			payload.TimeControl.WhiteTime,
 			payload.TimeControl.BlackTime,
 			payload.TimeControl.WhiteIncrement,
 			payload.TimeControl.BlackIncrement,
-			payload.Color,
+			clr,
 			payload.InitialFen,
 		)
 		if err != nil {
@@ -133,8 +142,8 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			Payload: messages.GameCreatedPayload{
 				GameID:      gameSession.ID.String(),
 				InitialFEN:  gameSession.FEN,
-				WhiteTime:   gameSession.WhiteTime,
-				BlackTime:   gameSession.BlackTime,
+				WhiteTime:   gameSession.Clock.GetRemainingTime().White,
+				BlackTime:   gameSession.Clock.GetRemainingTime().Black,
 				CurrentTurn: gameSession.Turn,
 			},
 		}
@@ -179,8 +188,8 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			Payload: messages.GameStatePayload{
 				GameID:      session.ID.String(),
 				BoardFEN:    session.FEN,
-				WhiteTime:   session.WhiteTime,
-				BlackTime:   session.BlackTime,
+				WhiteTime:   session.Clock.GetRemainingTime().White,
+				BlackTime:   session.Clock.GetRemainingTime().Black,
 				CurrentTurn: session.Turn,
 			},
 		}

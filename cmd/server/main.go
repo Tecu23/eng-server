@@ -67,7 +67,8 @@ func main() {
 		fmt.Fprintln(w, "Server is up and running!")
 	})
 
-	http.HandleFunc("/ws", app.authenticate(http.HandlerFunc(app.wsHandler)))
+	http.HandleFunc("/ws", app.wsHandler)
+	// http.HandleFunc("/ws", app.authenticate(http.HandlerFunc(app.wsHandler)))
 
 	app.Logger.Info("Starting server", zap.String("address", ":"+app.Config.Port))
 	if err := http.ListenAndServe(":"+app.Config.Port, nil); err != nil {

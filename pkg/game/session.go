@@ -4,35 +4,28 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
+	"github.com/tecu23/eng-server/internal/messages"
+	"github.com/tecu23/eng-server/pkg/chess"
 	"github.com/tecu23/eng-server/pkg/engine"
-	"github.com/tecu23/eng-server/pkg/messages"
 )
 
 type GameSession struct {
 	ID uuid.UUID
 
+	Conn *websocket.Conn
+
 	Engine *engine.UCIEngine
 
-	Turn string
-
+	FEN   string
 	Moves []string
+	Turn  chess.Color
 
-	FEN string
-
-	WhiteTime      int64
-	BlackTime      int64
-	WhiteIncrement int64
-	BlackIncrement int64
-
-	lastMoveTime time.Time
-
-	Conn *websocket.Conn
+	Clock *chess.Clock
 
 	done chan bool
 
@@ -42,124 +35,28 @@ type GameSession struct {
 	logger *zap.Logger
 }
 
-func (s *GameSession) startClockTicker() {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			s.updateClock()
-		case <-s.done:
-			return
-		}
-	}
-}
-
-func (s *GameSession) updateClock() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Calculate elapsed time since the last move.
-	elapsed := time.Since(s.lastMoveTime).Milliseconds()
-	var remainingTime int64
-
-	// Determine which clock to update based on whose turn it is.
-	if s.Turn == "w" {
-		remainingTime = s.WhiteTime - elapsed
-	} else {
-		remainingTime = s.BlackTime - elapsed
-	}
-
-	s.logger.Debug(
-		"updating clock",
-		zap.String("turn", s.Turn),
-		zap.Int64("remaining_time", remainingTime),
-	)
-
-	// Send a clock update to the client.
-	if s.Conn != nil {
-		var payload messages.TimeUpdatePayload
-		var timeUpdateMsg messages.OutboundMessage
-
-		payload.Remaining = remainingTime
-		payload.Color = s.Turn
-
-		timeUpdateMsg.Event = "CLOCK_UPDATE"
-		timeUpdateMsg.Payload = payload
-
-		s.SendJSON(timeUpdateMsg)
-	}
-
-	// If the clock reaches zero, handle the timeout.
-	if remainingTime <= 0 {
-		s.handleTimeout()
-	}
-}
-
-func (s *GameSession) handleTimeout() {
-	// Signal to stop the clock ticker.
-	select {
-	case s.done <- true:
-	default:
-	}
-
-	var result string
-	if s.Turn == "w" {
-		result = "Black wins on time"
-	} else {
-		result = "White wins on time"
-	}
-
-	s.logger.Info("game over", zap.String("reason", result))
-
-	if s.Conn != nil {
-		var payload messages.GameOverPayload
-		var gameOverMsg messages.OutboundMessage
-
-		payload.Reason = result
-
-		gameOverMsg.Event = "GAME_OVER"
-		gameOverMsg.Payload = payload
-
-		s.SendJSON(gameOverMsg)
-	}
-
-	// Optionally shut down the engine if one was running.
-	if s.Engine != nil {
-		s.Engine.Close()
-	}
-}
-
 func (s *GameSession) ProcessMove(move string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Calculate how much time has elapsed since the turn started.
-	elapsed := time.Since(s.lastMoveTime).Milliseconds()
-
-	// Update the clock for the active player.
-	if s.Turn == "w" {
-		s.WhiteTime = s.WhiteTime - elapsed + s.WhiteIncrement
-		s.Turn = "b" // Switch turn.
-	} else {
-		s.BlackTime = s.BlackTime - elapsed + s.BlackIncrement
-		s.Turn = "w"
-	}
-
 	// Record the move.
 	s.Moves = append(s.Moves, move)
 
-	// Reset the timer for the new move.
-	s.lastMoveTime = time.Now()
+	s.Turn = s.Turn.Opp()
+	s.Clock.Switch()
 
-	s.logger.Info("processed move", zap.String("move", move), zap.String("new_turn", s.Turn))
+	s.logger.Info(
+		"processed move",
+		zap.String("move", move),
+		zap.String("new_turn", string(s.Turn)),
+	)
 
 	return nil
 }
 
 func (s *GameSession) ProcessEngineMove() {
 	s.mu.Lock()
-	wTime, bTime, mvs, fen, turn := s.WhiteTime, s.BlackTime, s.Moves, s.FEN, s.Turn
+	wTime, bTime, mvs, fen, turn := s.Clock.GetRemainingTime().White, s.Clock.GetRemainingTime().Black, s.Moves, s.FEN, s.Turn
 	s.mu.Unlock()
 
 	command := fmt.Sprintf("position fen %s moves %s", fen, strings.Join(mvs, " "))
@@ -214,4 +111,58 @@ func (s *GameSession) SendJSON(msg messages.OutboundMessage) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.Conn.WriteJSON(msg)
+}
+
+func (s *GameSession) StartClockUpdates() {
+	go func() {
+		tickChan := s.Clock.GetTickChannel()
+		for {
+			select {
+			case <-s.done:
+				return
+			case tick := <-tickChan:
+				var payload messages.ClockUpdatePayload
+				payload.WhiteTime = tick.White
+				payload.BlackTime = tick.Black
+				payload.ActiveColor = string(tick.ActiveColor)
+
+				msg := messages.OutboundMessage{
+					Event:   "CLOCK_UPDATE",
+					Payload: payload,
+				}
+
+				if err := s.SendJSON(msg); err != nil {
+					s.logger.Error("failed to send clock update", zap.Error(err))
+				}
+
+			}
+		}
+	}()
+}
+
+func (s *GameSession) StartTimeoutMonitor() {
+	go func() {
+		timeupChan := s.Clock.GetTimeupChannel()
+		for {
+			select {
+			case <-s.done:
+				return
+			case color := <-timeupChan:
+				// Handle timeout - notify client that time is up
+				var payload messages.TimeupPayload
+				payload.Color = string(color)
+
+				msg := messages.OutboundMessage{
+					Event:   "TIME_UP",
+					Payload: payload,
+				}
+
+				if err := s.SendJSON(msg); err != nil {
+					s.logger.Error("failed to send timeout notification", zap.Error(err))
+				}
+
+				s.logger.Info("player time expired", zap.String("color", string(color)))
+			}
+		}
+	}()
 }
