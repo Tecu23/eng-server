@@ -12,19 +12,17 @@ import (
 	"github.com/tecu23/eng-server/internal/messages"
 	"github.com/tecu23/eng-server/pkg/chess"
 	"github.com/tecu23/eng-server/pkg/engine"
+	"github.com/tecu23/eng-server/pkg/events"
 )
 
 type GameSession struct {
-	ID uuid.UUID
-
-	Conn *websocket.Conn
-
+	ID     uuid.UUID
+	Conn   *websocket.Conn
 	Engine *engine.UCIEngine
 
 	FEN   string
 	Moves []string
 	Turn  chess.Color
-
 	Clock *chess.Clock
 
 	done chan bool
@@ -32,7 +30,8 @@ type GameSession struct {
 	mu      sync.Mutex
 	writeMu sync.Mutex
 
-	logger *zap.Logger
+	publisher *events.Publisher
+	logger    *zap.Logger
 }
 
 func (s *GameSession) ProcessMove(move string) error {
@@ -41,7 +40,6 @@ func (s *GameSession) ProcessMove(move string) error {
 
 	// Record the move.
 	s.Moves = append(s.Moves, move)
-
 	s.Turn = s.Turn.Opp()
 	s.Clock.Switch()
 
@@ -50,6 +48,19 @@ func (s *GameSession) ProcessMove(move string) error {
 		zap.String("move", move),
 		zap.String("new_turn", string(s.Turn)),
 	)
+
+	// Publish move processed event
+	s.publisher.Publish(events.Event{
+		Type:   events.EventMoveProcessed,
+		GameID: s.ID.String(),
+		Payload: messages.GameStatePayload{
+			GameID:      s.ID.String(),
+			BoardFEN:    s.FEN,
+			WhiteTime:   s.Clock.GetRemainingTime().White,
+			BlackTime:   s.Clock.GetRemainingTime().Black,
+			CurrentTurn: s.Turn,
+		},
+	})
 
 	return nil
 }
@@ -90,19 +101,15 @@ func (s *GameSession) ProcessEngineMove() {
 		return
 	}
 
-	// Inform the client about the move and the turn change.
-	if s.Conn != nil {
-		var payload messages.EngineMovePayload
-		var engineMoveMsg messages.OutboundMessage
-
-		payload.Move = bestMove
-		payload.Color = turn
-
-		engineMoveMsg.Event = "ENGINE_MOVE"
-		engineMoveMsg.Payload = payload
-
-		s.SendJSON(engineMoveMsg)
-	}
+	// Publish engine moved event
+	s.publisher.Publish(events.Event{
+		Type:   events.EventEngineMoved,
+		GameID: s.ID.String(),
+		Payload: messages.EngineMovePayload{
+			Move:  bestMove,
+			Color: turn,
+		},
+	})
 
 	s.logger.Info("engine move processed", zap.String("move", bestMove))
 }
@@ -121,20 +128,16 @@ func (s *GameSession) StartClockUpdates() {
 			case <-s.done:
 				return
 			case tick := <-tickChan:
-				var payload messages.ClockUpdatePayload
-				payload.WhiteTime = tick.White
-				payload.BlackTime = tick.Black
-				payload.ActiveColor = string(tick.ActiveColor)
-
-				msg := messages.OutboundMessage{
-					Event:   "CLOCK_UPDATE",
-					Payload: payload,
-				}
-
-				if err := s.SendJSON(msg); err != nil {
-					s.logger.Error("failed to send clock update", zap.Error(err))
-				}
-
+				// Publish clock update event
+				s.publisher.Publish(events.Event{
+					Type:   events.EventClockUpdated,
+					GameID: s.ID.String(),
+					Payload: messages.ClockUpdatePayload{
+						WhiteTime:   tick.White,
+						BlackTime:   tick.Black,
+						ActiveColor: string(tick.ActiveColor),
+					},
+				})
 			}
 		}
 	}()
@@ -148,21 +151,30 @@ func (s *GameSession) StartTimeoutMonitor() {
 			case <-s.done:
 				return
 			case color := <-timeupChan:
-				// Handle timeout - notify client that time is up
-				var payload messages.TimeupPayload
-				payload.Color = string(color)
-
-				msg := messages.OutboundMessage{
-					Event:   "TIME_UP",
-					Payload: payload,
-				}
-
-				if err := s.SendJSON(msg); err != nil {
-					s.logger.Error("failed to send timeout notification", zap.Error(err))
-				}
-
+				// Publish time up event
+				s.publisher.Publish(events.Event{
+					Type:   events.EventTimeUp,
+					GameID: s.ID.String(),
+					Payload: messages.TimeupPayload{
+						Color: string(color),
+					},
+				})
 				s.logger.Info("player time expired", zap.String("color", string(color)))
 			}
 		}
 	}()
+}
+
+func (s *GameSession) Terminate() {
+	close(s.done)
+	s.Engine.Close()
+
+	// Publish game terminated event
+	s.publisher.Publish(events.Event{
+		Type:   events.EventGameTerminated,
+		GameID: s.ID.String(),
+		Payload: map[string]string{
+			"game_id": s.ID.String(),
+		},
+	})
 }

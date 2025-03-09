@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/tecu23/eng-server/internal/messages"
+	"github.com/tecu23/eng-server/pkg/events"
 )
 
 type Connection struct {
@@ -18,16 +19,23 @@ type Connection struct {
 	send    chan []byte // Buffered channel of outbound messages.
 	writeMu sync.Mutex  // Mutex to protect concurrent writes to ws.
 
-	logger *zap.Logger
+	publisher *events.Publisher
+	logger    *zap.Logger
 }
 
-func NewConnection(ws *websocket.Conn, hub *Hub, logger *zap.Logger) *Connection {
+func NewConnection(
+	ws *websocket.Conn,
+	hub *Hub,
+	publisher *events.Publisher,
+	logger *zap.Logger,
+) *Connection {
 	return &Connection{
-		ID:     uuid.New(),
-		ws:     ws,
-		hub:    hub,
-		send:   make(chan []byte, 256), // buffer3ed for outgoing messages
-		logger: logger,
+		ID:        uuid.New(),
+		ws:        ws,
+		hub:       hub,
+		send:      make(chan []byte, 256), // buffered for outgoing messages
+		publisher: publisher,
+		logger:    logger,
 	}
 }
 
@@ -37,6 +45,14 @@ func (c *Connection) ReadPump() {
 		c.hub.unregister <- c
 		c.ws.Close()
 	}()
+
+	// Publish connection closed event
+	c.publisher.Publish(events.Event{
+		Type: events.EventConnectionClosed,
+		Payload: map[string]string{
+			"connection_id": c.ID.String(),
+		},
+	})
 
 	for {
 		msgType, msg, err := c.ws.ReadMessage()

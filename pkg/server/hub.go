@@ -10,6 +10,7 @@ import (
 
 	"github.com/tecu23/eng-server/internal/messages"
 	"github.com/tecu23/eng-server/pkg/chess"
+	"github.com/tecu23/eng-server/pkg/events"
 	"github.com/tecu23/eng-server/pkg/game"
 )
 
@@ -22,8 +23,11 @@ type InboundHubMessage struct {
 // Hub should keep track of all active connection. Also be responsible of registering/unregistering connections
 // Messages come from the inbound channel and are redirected to the corrected game session or broadcast
 type Hub struct {
-	mu          sync.RWMutex         // Mutex to protect direct access to the connections map.
-	connections map[*Connection]bool // Registered connections
+	mu sync.RWMutex // Mutex to protect direct access to the connections map.
+
+	connections     map[*Connection]bool     // Registered connections
+	gameConnections map[string]*Connection   // Maps game IDs to connections
+	connGames       map[*Connection][]string // Maps connections to their game IDs
 
 	register   chan *Connection       // Incoming registration
 	unregister chan *Connection       // Incoming unregistration
@@ -32,21 +36,186 @@ type Hub struct {
 	broadcast chan []byte // Channel to broadcast to everyone
 
 	gameManager *game.Manager
+	publisher   *events.Publisher
 
 	logger *zap.Logger
 }
 
 // NewHub creates a new hub
-func NewHub(gm *game.Manager, logger *zap.Logger) *Hub {
-	return &Hub{
-		connections: make(map[*Connection]bool),
-		register:    make(chan *Connection),
-		unregister:  make(chan *Connection),
-		inbound:     make(chan InboundHubMessage),
-		broadcast:   make(chan []byte),
-		gameManager: gm,
-		logger:      logger,
+func NewHub(gm *game.Manager, publisher *events.Publisher, logger *zap.Logger) *Hub {
+	hub := &Hub{
+		connections:     make(map[*Connection]bool),
+		gameConnections: make(map[string]*Connection),
+		connGames:       make(map[*Connection][]string),
+		register:        make(chan *Connection),
+		unregister:      make(chan *Connection),
+		inbound:         make(chan InboundHubMessage),
+		broadcast:       make(chan []byte),
+		gameManager:     gm,
+		publisher:       publisher,
+		logger:          logger,
 	}
+
+	// Subscribe to events
+	hub.setupEventHandlers()
+
+	return hub
+}
+
+// setupEventHandlers sets up the hub's event handlers
+func (h *Hub) setupEventHandlers() {
+	// Handle game created events
+	h.publisher.Subscribe(events.EventGameCreated, func(event events.Event) {
+		payload, ok := event.Payload.(messages.GameCreatedPayload)
+		if !ok {
+			h.logger.Error("Invalid game created payload type")
+			return
+		}
+
+		// Find the connection associated with this game
+		// This mapping would need to be maintained separately
+		conn := h.findConnectionForGame(event.GameID)
+		if conn == nil {
+			h.logger.Error(
+				"Could not find connection for game",
+				zap.String("game_id", event.GameID),
+			)
+			return
+		}
+
+		resp := messages.OutboundMessage{
+			Event:   "GAME_CREATED",
+			Payload: payload,
+		}
+
+		h.sendMessage(conn, resp)
+	})
+
+	// Handle engine move events
+	h.publisher.Subscribe(events.EventEngineMoved, func(event events.Event) {
+		payload, ok := event.Payload.(messages.EngineMovePayload)
+		if !ok {
+			h.logger.Error("Invalid engine move payload type")
+			return
+		}
+
+		conn := h.findConnectionForGame(event.GameID)
+		if conn == nil {
+			h.logger.Error(
+				"Could not find connection for game",
+				zap.String("game_id", event.GameID),
+			)
+			return
+		}
+
+		resp := messages.OutboundMessage{
+			Event:   "ENGINE_MOVE",
+			Payload: payload,
+		}
+
+		h.sendMessage(conn, resp)
+	})
+
+	// Handle clock update events
+	h.publisher.Subscribe(events.EventClockUpdated, func(event events.Event) {
+		payload, ok := event.Payload.(messages.ClockUpdatePayload)
+		if !ok {
+			h.logger.Error("Invalid clock update payload type")
+			return
+		}
+
+		conn := h.findConnectionForGame(event.GameID)
+		if conn == nil {
+			h.logger.Error(
+				"Could not find connection for game",
+				zap.String("game_id", event.GameID),
+			)
+			return
+		}
+
+		resp := messages.OutboundMessage{
+			Event:   "CLOCK_UPDATE",
+			Payload: payload,
+		}
+
+		h.sendMessage(conn, resp)
+	})
+
+	// Handle time up events
+	h.publisher.Subscribe(events.EventTimeUp, func(event events.Event) {
+		payload, ok := event.Payload.(messages.TimeupPayload)
+		if !ok {
+			h.logger.Error("Invalid time up payload type")
+			return
+		}
+
+		conn := h.findConnectionForGame(event.GameID)
+		if conn == nil {
+			h.logger.Error(
+				"Could not find connection for game",
+				zap.String("game_id", event.GameID),
+			)
+			return
+		}
+
+		resp := messages.OutboundMessage{
+			Event:   "TIME_UP",
+			Payload: payload,
+		}
+
+		h.sendMessage(conn, resp)
+	})
+}
+
+// findConnectionForGame finds the connection associated with a game
+func (h *Hub) findConnectionForGame(gameID string) *Connection {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	conn, exists := h.gameConnections[gameID]
+	if !exists {
+		return nil
+	}
+	return conn
+}
+
+// associateConnectionWithGame registers a connection as the owner of a game
+func (h *Hub) associateConnectionWithGame(conn *Connection, gameID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Add to game->connection mapping
+	h.gameConnections[gameID] = conn
+
+	// Add to connection->games mapping
+	h.connGames[conn] = append(h.connGames[conn], gameID)
+
+	h.logger.Info("Associated connection with game",
+		zap.String("connection_id", conn.ID.String()),
+		zap.String("game_id", gameID))
+}
+
+// removeGameAssociations removes all game associations for a connection
+func (h *Hub) removeGameAssociations(conn *Connection) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Get all games for this connection
+	games, exists := h.connGames[conn]
+	if !exists {
+		return
+	}
+
+	// Remove each game->connection mapping
+	for _, gameID := range games {
+		delete(h.gameConnections, gameID)
+		h.logger.Info("Removed game association",
+			zap.String("game_id", gameID),
+			zap.String("connection_id", conn.ID.String()))
+	}
+
+	// Remove the connection->games mapping
+	delete(h.connGames, conn)
 }
 
 // Run is the main execution of the hub
@@ -93,12 +262,23 @@ func (h *Hub) Unregister(conn *Connection) {
 }
 
 func (h *Hub) unregisterConnection(conn *Connection) {
+	// First, remove any game associations
+	h.removeGameAssociations(conn)
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.connections[conn]; ok {
 		delete(h.connections, conn)
 		close(conn.send)
 		h.logger.Info("Connection unregistered", zap.Int("total_connections", len(h.connections)))
+
+		// Publish connection closed event
+		h.publisher.Publish(events.Event{
+			Type: events.EventConnectionClosed,
+			Payload: map[string]string{
+				"connection_id": conn.ID.String(),
+			},
+		})
 
 	}
 }
@@ -130,26 +310,17 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			payload.TimeControl.BlackIncrement,
 			clr,
 			payload.InitialFen,
+			h.publisher,
 		)
 		if err != nil {
 			h.logger.Error("Error creating game session", zap.Error(err))
 			h.sendError(msg.Conn, err.Error())
 			return
 		}
-
-		resp := messages.OutboundMessage{
-			Event: "GAME_CREATED",
-			Payload: messages.GameCreatedPayload{
-				GameID:      gameSession.ID.String(),
-				InitialFEN:  gameSession.FEN,
-				WhiteTime:   gameSession.Clock.GetRemainingTime().White,
-				BlackTime:   gameSession.Clock.GetRemainingTime().Black,
-				CurrentTurn: gameSession.Turn,
-			},
-		}
+		// Associate the connection with the game ID
+		h.associateConnectionWithGame(msg.Conn, gameSession.ID.String())
 
 		h.logger.Info("Game session created", zap.String("game_id", gameSession.ID.String()))
-		h.sendMessage(msg.Conn, resp)
 
 	case "MAKE_MOVE":
 		var payload messages.MakeMovePayload
@@ -182,20 +353,6 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			h.sendError(msg.Conn, err.Error())
 			return
 		}
-
-		resp := messages.OutboundMessage{
-			Event: "GAME_STATE",
-			Payload: messages.GameStatePayload{
-				GameID:      session.ID.String(),
-				BoardFEN:    session.FEN,
-				WhiteTime:   session.Clock.GetRemainingTime().White,
-				BlackTime:   session.Clock.GetRemainingTime().Black,
-				CurrentTurn: session.Turn,
-			},
-		}
-
-		h.logger.Info("Game state updated", zap.String("game_id", session.ID.String()))
-		h.sendMessage(msg.Conn, resp)
 
 		// Call engine to make an engine move as well
 		session.ProcessEngineMove()

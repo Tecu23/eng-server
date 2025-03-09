@@ -9,6 +9,27 @@ type OutboundMessage struct {
 	Payload interface{} `json:"payload"`
 }
 
+// ClockUpdatePayload contains information about the current state of the clock
+type ClockUpdatePayload struct {
+	GameID      string `json:"gameId"`
+	WhiteTime   int64  `json:"whiteTimeMs"`
+	BlackTime   int64  `json:"blackTimeMs"`
+	ActiveColor string `json:"activeColor"`
+}
+
+// GameOverPayload contains the information about the state on an ended game
+type GameOverPayload struct {
+	GameID      string `json:"gameId"`
+	Reason      string `json:"reason"`
+	Result      string `json:"result"`
+	Description string `json:"description"`
+}
+
+// Resignation payload
+type ResignPayload struct {
+	GameID string `json:"gameId"`
+}
+
 type ConnectedPayload struct {
 	ConnectionId string `json:"connection_id"`
 }
@@ -20,10 +41,6 @@ type GameCreatedPayload struct {
 	WhiteTime   int64       `json:"white_time"`
 	BlackTime   int64       `json:"black_time"`
 	CurrentTurn chess.Color `json:"current_turn"`
-}
-
-type GameOverPayload struct {
-	Reason string `json:"reason"`
 }
 
 // GameStatePayload represents the payload returned after updating the game state
@@ -44,13 +61,6 @@ type ErrorPayload struct {
 type EngineMovePayload struct {
 	Move  string      `json:"move"`
 	Color chess.Color `json:"color"`
-}
-
-// ClockUpdatePayload contains information about the current state of the clock
-type ClockUpdatePayload struct {
-	WhiteTime   int64  `json:"whiteTimeMs"` // White's remaining time in milliseconds
-	BlackTime   int64  `json:"blackTimeMs"` // Black's remaining time in milliseconds
-	ActiveColor string `json:"activeColor"` // The color of the active player (White or Black)
 }
 
 // TimeupPayload contains information about which player ran out of time

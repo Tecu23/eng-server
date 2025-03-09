@@ -8,22 +8,82 @@ import (
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
+	"github.com/tecu23/eng-server/internal/messages"
 	"github.com/tecu23/eng-server/pkg/chess"
 	"github.com/tecu23/eng-server/pkg/engine"
+	"github.com/tecu23/eng-server/pkg/events"
 )
 
 type Manager struct {
-	sessions map[uuid.UUID]*GameSession
-	mu       sync.RWMutex
-	logger   *zap.Logger
+	sessions  map[uuid.UUID]*GameSession
+	mu        sync.RWMutex
+	publisher *events.Publisher
+	logger    *zap.Logger
 }
 
 // NewManager creates a new manager with in-memory storage
-func NewManager(logger *zap.Logger) *Manager {
-	return &Manager{
-		sessions: make(map[uuid.UUID]*GameSession),
-		logger:   logger,
+func NewManager(logger *zap.Logger, publisher *events.Publisher) *Manager {
+	manager := &Manager{
+		sessions:  make(map[uuid.UUID]*GameSession),
+		logger:    logger,
+		publisher: publisher,
 	}
+
+	// Set up event handlers
+	manager.setupEventHandlers()
+
+	return manager
+}
+
+// setupEventHandlers sets up event handlers for the game manager
+func (m *Manager) setupEventHandlers() {
+	// Handle connection closed events
+	m.publisher.Subscribe(events.EventConnectionClosed, func(event events.Event) {
+		payload, ok := event.Payload.(map[string]string)
+		if !ok {
+			m.logger.Error("Invalid connection closed payload type")
+			return
+		}
+
+		connectionID := payload["connection_id"]
+
+		// Find all game sessions associated with this connection and terminate them
+		m.terminateSessionsByConnectionID(connectionID)
+	})
+
+	// Handle game terminated events
+	m.publisher.Subscribe(events.EventGameTerminated, func(event events.Event) {
+		// Remove the session from the manager
+		if event.GameID != "" {
+			gameID, err := uuid.Parse(event.GameID)
+			if err != nil {
+				m.logger.Error("Invalid game ID in game terminated event", zap.Error(err))
+				return
+			}
+			m.RemoveSession(gameID)
+		}
+	})
+}
+
+// terminateSessionsByConnectionID finds and terminates all game sessions for a connection
+func (m *Manager) terminateSessionsByConnectionID(connectionID string) {
+	// This is a placeholder - you would need to implement a way to track
+	// which sessions are associated with which connections
+	m.logger.Info("Terminating sessions for connection", zap.String("connection_id", connectionID))
+
+	// Example implementation:
+	// m.mu.RLock()
+	// for id, session := range m.sessions {
+	//     if session.ConnectionID == connectionID {
+	//         // Make a copy of the ID to avoid issues with the defer and loop variable
+	//         sessionID := id
+	//         go func() {
+	//             session.Terminate()
+	//             m.RemoveSession(sessionID)
+	//         }()
+	//     }
+	// }
+	// m.mu.RUnlock()
 }
 
 // CreateSession creates a new game session with the given parameters and registers it.
@@ -32,6 +92,7 @@ func (m *Manager) CreateSession(
 	whiteTime, blackTime, whiteIncrement, blackIncremenent int64,
 	turn chess.Color,
 	fen string,
+	publisher *events.Publisher,
 ) (*GameSession, error) {
 	sessionID := uuid.New()
 
@@ -61,9 +122,10 @@ func (m *Manager) CreateSession(
 		FEN:   fen,
 		Clock: clock,
 
-		Conn:   conn,
-		done:   make(chan bool),
-		logger: m.logger,
+		Conn:      conn,
+		done:      make(chan bool),
+		logger:    m.logger,
+		publisher: publisher,
 	}
 
 	m.mu.Lock()
@@ -76,6 +138,19 @@ func (m *Manager) CreateSession(
 	go session.Clock.Start()
 	go session.StartClockUpdates()
 	go session.StartTimeoutMonitor()
+
+	// Publish game created event
+	publisher.Publish(events.Event{
+		Type:   events.EventGameCreated,
+		GameID: sessionID.String(),
+		Payload: messages.GameCreatedPayload{
+			GameID:      sessionID.String(),
+			InitialFEN:  fen,
+			WhiteTime:   whiteTime,
+			BlackTime:   blackTime,
+			CurrentTurn: turn,
+		},
+	})
 
 	return session, nil
 }
@@ -92,6 +167,12 @@ func (m *Manager) GetSession(id uuid.UUID) (*GameSession, bool) {
 func (m *Manager) RemoveSession(id uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.sessions, id)
+
+	if session, ok := m.sessions[id]; ok {
+		// Ensure we close the engine and channels
+		session.Engine.Close()
+		close(session.done)
+	}
+
 	m.logger.Info("removed game session", zap.String("session_id", id.String()))
 }

@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/tecu23/eng-server/pkg/config"
+	"github.com/tecu23/eng-server/pkg/events"
 	"github.com/tecu23/eng-server/pkg/game"
 	"github.com/tecu23/eng-server/pkg/server"
 )
@@ -29,9 +30,10 @@ var upgrader = websocket.Upgrader{
 
 // App encapsulates global dependencies
 type application struct {
-	Logger *zap.Logger
-	Config *config.Config
-	Hub    *server.Hub
+	Logger    *zap.Logger
+	Config    *config.Config
+	Publisher *events.Publisher
+	Hub       *server.Hub
 }
 
 func main() {
@@ -47,13 +49,16 @@ func main() {
 	logger := initLogger(config.Debug)
 	defer logger.Sync()
 
-	gm := game.NewManager(logger)
-	hub := server.NewHub(gm, logger)
+	publisher := events.NewPublisher()
+
+	gm := game.NewManager(logger, publisher)
+	hub := server.NewHub(gm, publisher, logger)
 
 	app := &application{
-		Logger: logger,
-		Config: config,
-		Hub:    hub,
+		Logger:    logger,
+		Config:    config,
+		Hub:       hub,
+		Publisher: publisher,
 	}
 
 	go app.Hub.Run()
@@ -101,7 +106,7 @@ func (app *application) wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn := server.NewConnection(ws, app.Hub, app.Logger)
+	conn := server.NewConnection(ws, app.Hub, app.Publisher, app.Logger)
 	app.Hub.Register(conn)
 
 	go conn.WritePump()
