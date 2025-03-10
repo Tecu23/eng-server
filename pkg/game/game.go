@@ -31,11 +31,13 @@ type Game struct {
 	ID     uuid.UUID
 	Engine *engine.UCIEngine
 
+	ConnectionID uuid.UUID
+
 	Clock  *Clock
 	Game   *chess.Game
 	Status GameStatus
 
-	Done chan bool
+	done chan bool
 
 	mu sync.Mutex
 
@@ -45,6 +47,7 @@ type Game struct {
 
 func CreateGame(
 	params CreateGameParams,
+	connectionId uuid.UUID,
 	eng *engine.UCIEngine,
 	publisher *events.Publisher,
 	logger *zap.Logger,
@@ -64,13 +67,15 @@ func CreateGame(
 	session := &Game{
 		ID: sessionID,
 
+		ConnectionID: connectionId,
+
 		Engine: eng,
 
 		Game:   internalGame,
 		Clock:  clock,
 		Status: StatusPending,
 
-		Done:      make(chan bool),
+		done:      make(chan bool),
 		Logger:    logger,
 		Publisher: publisher,
 	}
@@ -162,7 +167,7 @@ func (s *Game) StartClockUpdates() {
 		tickChan := s.Clock.GetTickChannel()
 		for {
 			select {
-			case <-s.Done:
+			case <-s.done:
 				return
 			case tick := <-tickChan:
 				// Publish clock update event
@@ -185,7 +190,7 @@ func (s *Game) StartTimeoutMonitor() {
 		timeupChan := s.Clock.GetTimeupChannel()
 		for {
 			select {
-			case <-s.Done:
+			case <-s.done:
 				return
 			case color := <-timeupChan:
 				// Publish time up event
@@ -203,7 +208,7 @@ func (s *Game) StartTimeoutMonitor() {
 }
 
 func (s *Game) Terminate() {
-	close(s.Done)
+	close(s.done)
 	s.Engine.Close()
 
 	// Publish game terminated event

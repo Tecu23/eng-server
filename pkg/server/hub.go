@@ -310,6 +310,7 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			payload.TimeControl.BlackIncrement,
 			clr,
 			payload.InitialFen,
+			msg.Conn.ID,
 			h.publisher,
 		)
 		if err != nil {

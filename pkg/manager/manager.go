@@ -1,8 +1,6 @@
 package manager
 
 import (
-	"sync"
-
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -12,21 +10,26 @@ import (
 	"github.com/tecu23/eng-server/pkg/engine"
 	"github.com/tecu23/eng-server/pkg/events"
 	"github.com/tecu23/eng-server/pkg/game"
+	"github.com/tecu23/eng-server/pkg/repository"
 )
 
 type Manager struct {
-	sessions  map[uuid.UUID]*game.Game
-	mu        sync.RWMutex
+	repository *repository.InMemoryGameRepository
+
 	publisher *events.Publisher
 	logger    *zap.Logger
 }
 
 // NewManager creates a new manager with in-memory storage
-func NewManager(logger *zap.Logger, publisher *events.Publisher) *Manager {
+func NewManager(
+	repo *repository.InMemoryGameRepository,
+	logger *zap.Logger,
+	publisher *events.Publisher,
+) *Manager {
 	manager := &Manager{
-		sessions:  make(map[uuid.UUID]*game.Game),
-		logger:    logger,
-		publisher: publisher,
+		repository: repo,
+		logger:     logger,
+		publisher:  publisher,
 	}
 
 	// Set up event handlers
@@ -67,23 +70,26 @@ func (m *Manager) setupEventHandlers() {
 
 // terminateSessionsByConnectionID finds and terminates all game sessions for a connection
 func (m *Manager) terminateSessionsByConnectionID(connectionID string) {
-	// This is a placeholder - you would need to implement a way to track
-	// which sessions are associated with which connections
 	m.logger.Info("Terminating sessions for connection", zap.String("connection_id", connectionID))
 
-	// Example implementation:
-	// m.mu.RLock()
-	// for id, session := range m.sessions {
-	//     if session.ConnectionID == connectionID {
-	//         // Make a copy of the ID to avoid issues with the defer and loop variable
-	//         sessionID := id
-	//         go func() {
-	//             session.Terminate()
-	//             m.RemoveSession(sessionID)
-	//         }()
-	//     }
-	// }
-	// m.mu.RUnlock()
+	activeGames, err := m.repository.ListActiveGames()
+	if err != nil {
+		m.logger.Error(
+			"Could not terminate sessions for connection",
+			zap.String("connection_id", connectionID),
+			zap.Error(err),
+		)
+	}
+
+	for _, g := range activeGames {
+		if g.ConnectionID.String() == connectionID {
+			gameID := g.ID
+			go func() {
+				g.Terminate()
+				m.RemoveSession(gameID)
+			}()
+		}
+	}
 }
 
 // CreateSession creates a new game session with the given parameters and registers it.
@@ -92,6 +98,7 @@ func (m *Manager) CreateSession(
 	whiteTime, blackTime, whiteIncrement, blackIncremenent int64,
 	turn color.Color,
 	fen string,
+	connectionId uuid.UUID,
 	publisher *events.Publisher,
 ) (*game.Game, error) {
 	sessionID := uuid.New()
@@ -116,11 +123,11 @@ func (m *Manager) CreateSession(
 		TimeControl:  tc,
 	}
 
-	session, err := game.CreateGame(params, eng, publisher, m.logger)
+	session, err := game.CreateGame(params, connectionId, eng, publisher, m.logger)
 
-	m.mu.Lock()
-	m.sessions[sessionID] = session
-	m.mu.Unlock()
+	if err := m.repository.SaveGame(session); err != nil {
+		return nil, err
+	}
 
 	m.logger.Info("created new game session", zap.String("session_id", sessionID.String()))
 
@@ -147,22 +154,22 @@ func (m *Manager) CreateSession(
 
 // GetSession returns a session by ID
 func (m *Manager) GetSession(id uuid.UUID) (*game.Game, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	session, ok := m.sessions[id]
-	return session, ok
+	session, err := m.repository.GetGame(id)
+	if err != nil {
+		return nil, false
+	}
+	return session, true
 }
 
 // RemoveSession cleans up a finished session
 func (m *Manager) RemoveSession(id uuid.UUID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if session, ok := m.sessions[id]; ok {
-		// Ensure we close the engine and channels
-		session.Engine.Close()
-		close(session.Done)
+	session, err := m.repository.GetGame(id)
+	if err != nil {
+		m.logger.Error("could not remove game session", zap.Error(err))
+		return
 	}
+
+	session.Terminate()
 
 	m.logger.Info("removed game session", zap.String("session_id", id.String()))
 }
