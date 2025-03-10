@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/tecu23/eng-server/pkg/config"
+	"github.com/tecu23/eng-server/pkg/engine"
 	"github.com/tecu23/eng-server/pkg/events"
 	"github.com/tecu23/eng-server/pkg/manager"
 	"github.com/tecu23/eng-server/pkg/repository"
@@ -47,14 +48,29 @@ func main() {
 		Port:  *port,
 	}
 
+	// Initialize logger
 	logger := initLogger(config.Debug)
 	defer logger.Sync()
 
+	err := godotenv.Load()
+	if err != nil {
+		logger.Fatal("loading env error", zap.Error(err))
+	}
+
+	// Initialize event publisher
 	publisher := events.NewPublisher()
 
+	// Initialize repository
 	repository := repository.NewInMemoryRepository(logger)
 
-	gm := manager.NewManager(repository, logger, publisher)
+	// Initlialize engine pool
+	enginePool := engine.NewEnginePool(os.Getenv("ENGINE_PATH"), 5, logger)
+	if err := enginePool.Initialize(); err != nil {
+		logger.Fatal("initialize engine error", zap.Error(err))
+	}
+
+	// Initialize game manager
+	gm := manager.NewManager(repository, enginePool, logger, publisher)
 
 	hub := server.NewHub(gm, publisher, logger)
 
@@ -66,11 +82,6 @@ func main() {
 	}
 
 	go app.Hub.Run()
-
-	err := godotenv.Load()
-	if err != nil {
-		app.Logger.Fatal("loading env error", zap.Error(err))
-	}
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "Server is up and running!")

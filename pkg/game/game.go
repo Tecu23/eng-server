@@ -15,6 +15,7 @@ import (
 )
 
 type CreateGameParams struct {
+	GameID       uuid.UUID
 	StartPostion string
 	TimeControl  TimeControl
 }
@@ -52,8 +53,6 @@ func CreateGame(
 	publisher *events.Publisher,
 	logger *zap.Logger,
 ) (*Game, error) {
-	sessionID := uuid.New()
-
 	clock := NewClock(params.TimeControl)
 
 	var internalGame *chess.Game
@@ -65,7 +64,7 @@ func CreateGame(
 	}
 
 	session := &Game{
-		ID: sessionID,
+		ID: params.GameID,
 
 		ConnectionID: connectionId,
 
@@ -118,7 +117,6 @@ func (s *Game) ProcessEngineMove() {
 	s.mu.Unlock()
 
 	command := fmt.Sprintf("position fen %s", fen)
-	fmt.Println(command)
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
 		s.Logger.Error("engine command error", zap.Error(err))

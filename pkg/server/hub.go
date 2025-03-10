@@ -71,7 +71,6 @@ func (h *Hub) setupEventHandlers() {
 			h.logger.Error("Invalid game created payload type")
 			return
 		}
-
 		// Find the connection associated with this game
 		// This mapping would need to be maintained separately
 		conn := h.findConnectionForGame(event.GameID)
@@ -303,7 +302,6 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 		}
 
 		gameSession, err := h.gameManager.CreateSession(
-			msg.Conn.ws,
 			payload.TimeControl.WhiteTime,
 			payload.TimeControl.BlackTime,
 			payload.TimeControl.WhiteIncrement,
@@ -318,6 +316,7 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			h.sendError(msg.Conn, err.Error())
 			return
 		}
+
 		// Associate the connection with the game ID
 		h.associateConnectionWithGame(msg.Conn, gameSession.ID.String())
 

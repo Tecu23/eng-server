@@ -2,7 +2,6 @@ package manager
 
 import (
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
 	"github.com/tecu23/eng-server/internal/color"
@@ -15,6 +14,7 @@ import (
 
 type Manager struct {
 	repository *repository.InMemoryGameRepository
+	enginePool *engine.Pool
 
 	publisher *events.Publisher
 	logger    *zap.Logger
@@ -23,11 +23,13 @@ type Manager struct {
 // NewManager creates a new manager with in-memory storage
 func NewManager(
 	repo *repository.InMemoryGameRepository,
+	engPool *engine.Pool,
 	logger *zap.Logger,
 	publisher *events.Publisher,
 ) *Manager {
 	manager := &Manager{
 		repository: repo,
+		enginePool: engPool,
 		logger:     logger,
 		publisher:  publisher,
 	}
@@ -94,7 +96,6 @@ func (m *Manager) terminateSessionsByConnectionID(connectionID string) {
 
 // CreateSession creates a new game session with the given parameters and registers it.
 func (m *Manager) CreateSession(
-	conn *websocket.Conn,
 	whiteTime, blackTime, whiteIncrement, blackIncremenent int64,
 	turn color.Color,
 	fen string,
@@ -103,7 +104,7 @@ func (m *Manager) CreateSession(
 ) (*game.Game, error) {
 	sessionID := uuid.New()
 
-	eng, err := engine.NewUCIEngine("./bin/argo_linux_amd64", m.logger)
+	eng, err := m.enginePool.GetEngine()
 	if err != nil {
 		m.logger.Error("failed to initialize engine", zap.Error(err))
 		return nil, err
@@ -119,6 +120,7 @@ func (m *Manager) CreateSession(
 	}
 
 	params := game.CreateGameParams{
+		GameID:       sessionID,
 		StartPostion: fen,
 		TimeControl:  tc,
 	}
