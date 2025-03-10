@@ -3,7 +3,6 @@ package manager
 import (
 	"sync"
 
-	"github.com/corentings/chess/v2"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -112,30 +111,12 @@ func (m *Manager) CreateSession(
 		TimingMethod:    game.IncrementTiming,
 	}
 
-	clock := game.NewClock(tc)
-
-	var internalGame *chess.Game
-
-	if fen == "" || fen == "startpos" {
-		internalGame = chess.NewGame()
-	} else {
-		internalGame = chess.NewGame()
+	params := game.CreateGameParams{
+		StartPostion: fen,
+		TimeControl:  tc,
 	}
 
-	session := &game.Game{
-		ID: sessionID,
-
-		Engine: eng,
-
-		Game:   internalGame,
-		Clock:  clock,
-		Status: game.StatusPending,
-
-		Conn:      conn,
-		Done:      make(chan bool),
-		Logger:    m.logger,
-		Publisher: publisher,
-	}
+	session, err := game.CreateGame(params, eng, publisher, m.logger)
 
 	m.mu.Lock()
 	m.sessions[sessionID] = session

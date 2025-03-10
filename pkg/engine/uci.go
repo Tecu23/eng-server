@@ -8,22 +8,31 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // UCIEngine represents a UCI-compatible chess engine
 type UCIEngine struct {
-	cmd          *exec.Cmd
-	stdinPipe    io.WriteCloser
-	stdoutPipe   io.ReadCloser
-	reader       *bufio.Reader
+	ID uuid.UUID
+
+	cmd *exec.Cmd
+
+	stdinPipe  io.WriteCloser
+	stdoutPipe io.ReadCloser
+	reader     *bufio.Reader
+
 	mutex        sync.Mutex
 	quitChan     chan struct{}
 	BestMoveChan chan string
+
+	logger *zap.Logger
 }
 
 // NewUCIEngine starts the engine process and returns a UCIEngine instance.
 // enginePath is the path yo tou engine executable (e.g. "argo")
-func NewUCIEngine(enginePath string) (*UCIEngine, error) {
+func NewUCIEngine(enginePath string, logger *zap.Logger) (*UCIEngine, error) {
 	cmd := exec.Command(enginePath)
 
 	stdout, err := cmd.StdoutPipe()
@@ -47,6 +56,7 @@ func NewUCIEngine(enginePath string) (*UCIEngine, error) {
 		reader:       bufio.NewReader(stdout),
 		quitChan:     make(chan struct{}),
 		BestMoveChan: make(chan string, 1),
+		logger:       logger,
 	}
 
 	// Initialize UCI mode
@@ -119,5 +129,9 @@ func (e *UCIEngine) SendCommand(cmd string) error {
 		return err
 	}
 
+	return nil
+}
+
+func (e *UCIEngine) SetOption(name, value string) error {
 	return nil
 }

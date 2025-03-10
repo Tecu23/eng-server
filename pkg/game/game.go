@@ -2,12 +2,10 @@ package game
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/corentings/chess/v2"
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
 	"github.com/tecu23/eng-server/internal/color"
@@ -15,6 +13,11 @@ import (
 	"github.com/tecu23/eng-server/pkg/engine"
 	"github.com/tecu23/eng-server/pkg/events"
 )
+
+type CreateGameParams struct {
+	StartPostion string
+	TimeControl  TimeControl
+}
 
 type GameStatus string
 
@@ -26,7 +29,6 @@ const (
 
 type Game struct {
 	ID     uuid.UUID
-	Conn   *websocket.Conn
 	Engine *engine.UCIEngine
 
 	Clock  *Clock
@@ -35,11 +37,45 @@ type Game struct {
 
 	Done chan bool
 
-	mu      sync.Mutex
-	writeMu sync.Mutex
+	mu sync.Mutex
 
 	Publisher *events.Publisher
 	Logger    *zap.Logger
+}
+
+func CreateGame(
+	params CreateGameParams,
+	eng *engine.UCIEngine,
+	publisher *events.Publisher,
+	logger *zap.Logger,
+) (*Game, error) {
+	sessionID := uuid.New()
+
+	clock := NewClock(params.TimeControl)
+
+	var internalGame *chess.Game
+
+	if params.StartPostion == "" || params.StartPostion == "startpos" {
+		internalGame = chess.NewGame()
+	} else {
+		internalGame = chess.NewGame()
+	}
+
+	session := &Game{
+		ID: sessionID,
+
+		Engine: eng,
+
+		Game:   internalGame,
+		Clock:  clock,
+		Status: StatusPending,
+
+		Done:      make(chan bool),
+		Logger:    logger,
+		Publisher: publisher,
+	}
+
+	return session, nil
 }
 
 func (s *Game) ProcessMove(move string) error {
@@ -76,13 +112,8 @@ func (s *Game) ProcessEngineMove() {
 		Turn()
 	s.mu.Unlock()
 
-	var mvs_string []string
-
-	for _, mv := range mvs {
-		mvs_string = append(mvs_string, mv.String())
-	}
-
-	command := fmt.Sprintf("position fen %s moves %s", fen, strings.Join(mvs_string, " "))
+	command := fmt.Sprintf("position fen %s", fen)
+	fmt.Println(command)
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
 		s.Logger.Error("engine command error", zap.Error(err))
@@ -124,12 +155,6 @@ func (s *Game) ProcessEngineMove() {
 	})
 
 	s.Logger.Info("engine move processed", zap.String("move", bestMove))
-}
-
-func (s *Game) SendJSON(msg messages.OutboundMessage) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.Conn.WriteJSON(msg)
 }
 
 func (s *Game) StartClockUpdates() {
