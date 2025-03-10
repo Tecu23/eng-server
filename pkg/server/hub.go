@@ -8,10 +8,10 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/tecu23/eng-server/internal/color"
 	"github.com/tecu23/eng-server/internal/messages"
-	"github.com/tecu23/eng-server/pkg/chess"
 	"github.com/tecu23/eng-server/pkg/events"
-	"github.com/tecu23/eng-server/pkg/game"
+	"github.com/tecu23/eng-server/pkg/manager"
 )
 
 // InboundHubMessage are the messages that the hub receives
@@ -35,14 +35,14 @@ type Hub struct {
 
 	broadcast chan []byte // Channel to broadcast to everyone
 
-	gameManager *game.Manager
+	gameManager *manager.Manager
 	publisher   *events.Publisher
 
 	logger *zap.Logger
 }
 
 // NewHub creates a new hub
-func NewHub(gm *game.Manager, publisher *events.Publisher, logger *zap.Logger) *Hub {
+func NewHub(gm *manager.Manager, publisher *events.Publisher, logger *zap.Logger) *Hub {
 	hub := &Hub{
 		connections:     make(map[*Connection]bool),
 		gameConnections: make(map[string]*Connection),
@@ -294,12 +294,12 @@ func (h *Hub) handleInbound(msg InboundHubMessage) {
 			return
 		}
 
-		var clr chess.Color
+		var clr color.Color
 
 		if payload.Color == "w" {
-			clr = chess.White
+			clr = color.White
 		} else {
-			clr = chess.Black
+			clr = color.Black
 		}
 
 		gameSession, err := h.gameManager.CreateSession(

@@ -1,5 +1,4 @@
-// Package chess defines the game entities
-package chess
+package game
 
 // TODO: Handle different timing methods
 // TODO: Handle classical time controls where after some 40 moves
@@ -9,6 +8,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/tecu23/eng-server/internal/color"
 )
 
 // TimeControl defines the time settings for a game
@@ -39,7 +40,7 @@ type Clock struct {
 	whiteIncrement int64
 	blackIncrement int64
 
-	activeColor Color
+	activeColor color.Color
 
 	timingMethod TimingMethod
 
@@ -56,7 +57,7 @@ type Clock struct {
 	mutex sync.RWMutex
 
 	// For external events
-	timeupChan chan Color
+	timeupChan chan color.Color
 	tickChan   chan ClockTick
 }
 
@@ -64,7 +65,7 @@ type Clock struct {
 type ClockTick struct {
 	White       int64
 	Black       int64
-	ActiveColor Color
+	ActiveColor color.Color
 }
 
 // NewClock creates a new chess clock with the given time controls
@@ -74,10 +75,10 @@ func NewClock(tc TimeControl) *Clock {
 		blackTimeMs:     tc.BlackTime,
 		whiteIncrement:  tc.WhiteIncrement,
 		blackIncrement:  tc.BlackIncrement,
-		activeColor:     White,
+		activeColor:     color.White,
 		timingMethod:    tc.TimingMethod,
 		movesPerControl: tc.MovesPerControl,
-		timeupChan:      make(chan Color, 1),
+		timeupChan:      make(chan color.Color, 1),
 		tickChan:        make(chan ClockTick, 10),
 	}
 }
@@ -120,7 +121,7 @@ func (c *Clock) Switch() {
 	}
 
 	if c.timingMethod == IncrementTiming {
-		if c.activeColor == White {
+		if c.activeColor == color.White {
 			c.whiteTimeMs += c.whiteIncrement
 		} else {
 			c.blackIncrement += c.blackIncrement
@@ -129,7 +130,7 @@ func (c *Clock) Switch() {
 
 	c.activeColor = c.activeColor.Opp()
 
-	if c.activeColor == White {
+	if c.activeColor == color.White {
 		c.moveCount++
 	}
 
@@ -142,21 +143,21 @@ func (c *Clock) Switch() {
 func (c *Clock) updateTime() {
 	elapsed := time.Since(c.startTime).Milliseconds()
 
-	if c.activeColor == White {
+	if c.activeColor == color.White {
 		c.whiteTimeMs -= elapsed
 	} else {
 		c.blackTimeMs -= elapsed
 	}
 
-	if (c.activeColor == White && c.whiteTimeMs <= 0) ||
-		(c.activeColor == Black && c.blackTimeMs <= 0) {
+	if (c.activeColor == color.White && c.whiteTimeMs <= 0) ||
+		(c.activeColor == color.Black && c.blackTimeMs <= 0) {
 		select {
 		case c.timeupChan <- c.activeColor:
 		default:
 			// Channel buffer is full
 		}
 
-		if c.activeColor == White {
+		if c.activeColor == color.White {
 			c.whiteTimeMs = 0
 		} else {
 			c.blackTimeMs = 0
@@ -178,7 +179,7 @@ func (c *Clock) GetRemainingTime() struct{ White, Black int64 } {
 	if c.isRunning {
 		elapsed := time.Since(c.startTime).Milliseconds()
 
-		if c.activeColor == White {
+		if c.activeColor == color.White {
 			whiteTime -= elapsed
 		} else {
 			blackTime -= elapsed
@@ -197,18 +198,18 @@ func (c *Clock) GetRemainingTime() struct{ White, Black int64 } {
 }
 
 // IsTimeUp checks if a player has run out of time
-func (c *Clock) IsTimeUp(color Color) bool {
+func (c *Clock) IsTimeUp(clr color.Color) bool {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
-	if color == White {
+	if clr == color.White {
 		return c.whiteTimeMs <= 0
 	}
 	return c.blackTimeMs <= 0
 }
 
 // GetTimeupChannel returns a channel that signals when time is up
-func (c *Clock) GetTimeupChannel() <-chan Color {
+func (c *Clock) GetTimeupChannel() <-chan color.Color {
 	return c.timeupChan
 }
 

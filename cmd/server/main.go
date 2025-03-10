@@ -14,7 +14,7 @@ import (
 
 	"github.com/tecu23/eng-server/pkg/config"
 	"github.com/tecu23/eng-server/pkg/events"
-	"github.com/tecu23/eng-server/pkg/game"
+	"github.com/tecu23/eng-server/pkg/manager"
 	"github.com/tecu23/eng-server/pkg/server"
 )
 
@@ -51,7 +51,7 @@ func main() {
 
 	publisher := events.NewPublisher()
 
-	gm := game.NewManager(logger, publisher)
+	gm := manager.NewManager(logger, publisher)
 	hub := server.NewHub(gm, publisher, logger)
 
 	app := &application{

@@ -1,21 +1,22 @@
-// Package game
-package game
+package manager
 
 import (
 	"sync"
 
+	"github.com/corentings/chess/v2"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
+	"github.com/tecu23/eng-server/internal/color"
 	"github.com/tecu23/eng-server/internal/messages"
-	"github.com/tecu23/eng-server/pkg/chess"
 	"github.com/tecu23/eng-server/pkg/engine"
 	"github.com/tecu23/eng-server/pkg/events"
+	"github.com/tecu23/eng-server/pkg/game"
 )
 
 type Manager struct {
-	sessions  map[uuid.UUID]*GameSession
+	sessions  map[uuid.UUID]*game.Game
 	mu        sync.RWMutex
 	publisher *events.Publisher
 	logger    *zap.Logger
@@ -24,7 +25,7 @@ type Manager struct {
 // NewManager creates a new manager with in-memory storage
 func NewManager(logger *zap.Logger, publisher *events.Publisher) *Manager {
 	manager := &Manager{
-		sessions:  make(map[uuid.UUID]*GameSession),
+		sessions:  make(map[uuid.UUID]*game.Game),
 		logger:    logger,
 		publisher: publisher,
 	}
@@ -90,42 +91,50 @@ func (m *Manager) terminateSessionsByConnectionID(connectionID string) {
 func (m *Manager) CreateSession(
 	conn *websocket.Conn,
 	whiteTime, blackTime, whiteIncrement, blackIncremenent int64,
-	turn chess.Color,
+	turn color.Color,
 	fen string,
 	publisher *events.Publisher,
-) (*GameSession, error) {
+) (*game.Game, error) {
 	sessionID := uuid.New()
 
-	eng, err := engine.NewUCIEngine("./bin/argo_linux_amd64")
+	eng, err := engine.NewUCIEngine("./bin/argo_linux_amd64", m.logger)
 	if err != nil {
 		m.logger.Error("failed to initialize engine", zap.Error(err))
 		return nil, err
 	}
 
-	tc := chess.TimeControl{
+	tc := game.TimeControl{
 		WhiteTime:       whiteTime,
 		WhiteIncrement:  whiteIncrement,
 		BlackTime:       blackTime,
 		BlackIncrement:  blackIncremenent,
 		MovesPerControl: 40,
-		TimingMethod:    chess.IncrementTiming,
+		TimingMethod:    game.IncrementTiming,
 	}
 
-	clock := chess.NewClock(tc)
+	clock := game.NewClock(tc)
 
-	session := &GameSession{
+	var internalGame *chess.Game
+
+	if fen == "" || fen == "startpos" {
+		internalGame = chess.NewGame()
+	} else {
+		internalGame = chess.NewGame()
+	}
+
+	session := &game.Game{
 		ID: sessionID,
 
 		Engine: eng,
 
-		Turn:  turn,
-		FEN:   fen,
-		Clock: clock,
+		Game:   internalGame,
+		Clock:  clock,
+		Status: game.StatusPending,
 
 		Conn:      conn,
-		done:      make(chan bool),
-		logger:    m.logger,
-		publisher: publisher,
+		Done:      make(chan bool),
+		Logger:    m.logger,
+		Publisher: publisher,
 	}
 
 	m.mu.Lock()
@@ -156,7 +165,7 @@ func (m *Manager) CreateSession(
 }
 
 // GetSession returns a session by ID
-func (m *Manager) GetSession(id uuid.UUID) (*GameSession, bool) {
+func (m *Manager) GetSession(id uuid.UUID) (*game.Game, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	session, ok := m.sessions[id]
@@ -171,7 +180,7 @@ func (m *Manager) RemoveSession(id uuid.UUID) {
 	if session, ok := m.sessions[id]; ok {
 		// Ensure we close the engine and channels
 		session.Engine.Close()
-		close(session.done)
+		close(session.Done)
 	}
 
 	m.logger.Info("removed game session", zap.String("session_id", id.String()))

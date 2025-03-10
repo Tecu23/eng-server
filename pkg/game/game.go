@@ -5,75 +5,87 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/corentings/chess/v2"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
+	"github.com/tecu23/eng-server/internal/color"
 	"github.com/tecu23/eng-server/internal/messages"
-	"github.com/tecu23/eng-server/pkg/chess"
 	"github.com/tecu23/eng-server/pkg/engine"
 	"github.com/tecu23/eng-server/pkg/events"
 )
 
-type GameSession struct {
+type GameStatus string
+
+const (
+	StatusActive    GameStatus = "active"
+	StatusPending   GameStatus = "pending"
+	StatusCompleted GameStatus = "completed"
+)
+
+type Game struct {
 	ID     uuid.UUID
 	Conn   *websocket.Conn
 	Engine *engine.UCIEngine
 
-	FEN   string
-	Moves []string
-	Turn  chess.Color
-	Clock *chess.Clock
+	Clock  *Clock
+	Game   *chess.Game
+	Status GameStatus
 
-	done chan bool
+	Done chan bool
 
 	mu      sync.Mutex
 	writeMu sync.Mutex
 
-	publisher *events.Publisher
-	logger    *zap.Logger
+	Publisher *events.Publisher
+	Logger    *zap.Logger
 }
 
-func (s *GameSession) ProcessMove(move string) error {
+func (s *Game) ProcessMove(move string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Record the move.
-	s.Moves = append(s.Moves, move)
-	s.Turn = s.Turn.Opp()
 	s.Clock.Switch()
+	s.Game.PushMove(move, nil)
 
-	s.logger.Info(
+	s.Logger.Info(
 		"processed move",
 		zap.String("move", move),
-		zap.String("new_turn", string(s.Turn)),
+		zap.String("new_turn", string(s.Game.Position().Turn())),
 	)
 
 	// Publish move processed event
-	s.publisher.Publish(events.Event{
+	s.Publisher.Publish(events.Event{
 		Type:   events.EventMoveProcessed,
 		GameID: s.ID.String(),
 		Payload: messages.GameStatePayload{
-			GameID:      s.ID.String(),
-			BoardFEN:    s.FEN,
-			WhiteTime:   s.Clock.GetRemainingTime().White,
-			BlackTime:   s.Clock.GetRemainingTime().Black,
-			CurrentTurn: s.Turn,
+			GameID:    s.ID.String(),
+			WhiteTime: s.Clock.GetRemainingTime().White,
+			BlackTime: s.Clock.GetRemainingTime().Black,
 		},
 	})
 
 	return nil
 }
 
-func (s *GameSession) ProcessEngineMove() {
+func (s *Game) ProcessEngineMove() {
 	s.mu.Lock()
-	wTime, bTime, mvs, fen, turn := s.Clock.GetRemainingTime().White, s.Clock.GetRemainingTime().Black, s.Moves, s.FEN, s.Turn
+	wTime, bTime, mvs, fen, turn := s.Clock.GetRemainingTime().White, s.Clock.GetRemainingTime().Black, s.Game.Moves(), s.Game.FEN(), s.Game.Position().
+		Turn()
 	s.mu.Unlock()
 
-	command := fmt.Sprintf("position fen %s moves %s", fen, strings.Join(mvs, " "))
+	var mvs_string []string
+
+	for _, mv := range mvs {
+		mvs_string = append(mvs_string, mv.String())
+	}
+
+	command := fmt.Sprintf("position fen %s moves %s", fen, strings.Join(mvs_string, " "))
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
-		s.logger.Error("engine command error", zap.Error(err))
+		s.Logger.Error("engine command error", zap.Error(err))
 		return
 	}
 
@@ -87,7 +99,7 @@ func (s *GameSession) ProcessEngineMove() {
 	)
 	if err := s.Engine.SendCommand(command); err != nil {
 		// Handle error
-		s.logger.Error("engine command error", zap.Error(err))
+		s.Logger.Error("engine command error", zap.Error(err))
 
 		return
 	}
@@ -97,39 +109,39 @@ func (s *GameSession) ProcessEngineMove() {
 
 	// Process the move as if the engine made it.
 	if err := s.ProcessMove(bestMove); err != nil {
-		s.logger.Error("failed to process engine move", zap.Error(err))
+		s.Logger.Error("failed to process engine move", zap.Error(err))
 		return
 	}
 
 	// Publish engine moved event
-	s.publisher.Publish(events.Event{
+	s.Publisher.Publish(events.Event{
 		Type:   events.EventEngineMoved,
 		GameID: s.ID.String(),
 		Payload: messages.EngineMovePayload{
 			Move:  bestMove,
-			Color: turn,
+			Color: color.Color(turn),
 		},
 	})
 
-	s.logger.Info("engine move processed", zap.String("move", bestMove))
+	s.Logger.Info("engine move processed", zap.String("move", bestMove))
 }
 
-func (s *GameSession) SendJSON(msg messages.OutboundMessage) error {
+func (s *Game) SendJSON(msg messages.OutboundMessage) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.Conn.WriteJSON(msg)
 }
 
-func (s *GameSession) StartClockUpdates() {
+func (s *Game) StartClockUpdates() {
 	go func() {
 		tickChan := s.Clock.GetTickChannel()
 		for {
 			select {
-			case <-s.done:
+			case <-s.Done:
 				return
 			case tick := <-tickChan:
 				// Publish clock update event
-				s.publisher.Publish(events.Event{
+				s.Publisher.Publish(events.Event{
 					Type:   events.EventClockUpdated,
 					GameID: s.ID.String(),
 					Payload: messages.ClockUpdatePayload{
@@ -143,34 +155,34 @@ func (s *GameSession) StartClockUpdates() {
 	}()
 }
 
-func (s *GameSession) StartTimeoutMonitor() {
+func (s *Game) StartTimeoutMonitor() {
 	go func() {
 		timeupChan := s.Clock.GetTimeupChannel()
 		for {
 			select {
-			case <-s.done:
+			case <-s.Done:
 				return
 			case color := <-timeupChan:
 				// Publish time up event
-				s.publisher.Publish(events.Event{
+				s.Publisher.Publish(events.Event{
 					Type:   events.EventTimeUp,
 					GameID: s.ID.String(),
 					Payload: messages.TimeupPayload{
 						Color: string(color),
 					},
 				})
-				s.logger.Info("player time expired", zap.String("color", string(color)))
+				s.Logger.Info("player time expired", zap.String("color", string(color)))
 			}
 		}
 	}()
 }
 
-func (s *GameSession) Terminate() {
-	close(s.done)
+func (s *Game) Terminate() {
+	close(s.Done)
 	s.Engine.Close()
 
 	// Publish game terminated event
-	s.publisher.Publish(events.Event{
+	s.Publisher.Publish(events.Event{
 		Type:   events.EventGameTerminated,
 		GameID: s.ID.String(),
 		Payload: map[string]string{

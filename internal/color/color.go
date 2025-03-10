@@ -1,4 +1,4 @@
-package chess
+package color
 
 type Color string
 
