@@ -376,3 +376,7 @@ func (h *Hub) sendError(conn *Connection, msg string) {
 func (h *Hub) sendMessage(conn *Connection, msg messages.OutboundMessage) {
 	conn.SendJSON(msg)
 }
+
+func (h *Hub) Shutdown() error {
+	return nil
+}

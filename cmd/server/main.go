@@ -3,15 +3,17 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
+	"github.com/tecu23/eng-server/internal/auth"
 	"github.com/tecu23/eng-server/pkg/config"
 	"github.com/tecu23/eng-server/pkg/engine"
 	"github.com/tecu23/eng-server/pkg/events"
@@ -32,10 +34,14 @@ var upgrader = websocket.Upgrader{
 
 // App encapsulates global dependencies
 type application struct {
+	Auth      *auth.APIKeyAuth
 	Logger    *zap.Logger
 	Config    *config.Config
 	Publisher *events.Publisher
 	Hub       *server.Hub
+	Server    *http.Server
+
+	StartTime time.Time
 }
 
 func main() {
@@ -74,25 +80,31 @@ func main() {
 
 	hub := server.NewHub(gm, publisher, logger)
 
+	var authKeys []string
+
+	if envAPIKeys := os.Getenv("API_KEYS"); envAPIKeys != "" {
+		// Split comma-separated list of API keys
+		keys := strings.Split(envAPIKeys, ",")
+		for i, key := range keys {
+			keys[i] = strings.TrimSpace(key)
+		}
+		authKeys = keys
+	}
+
 	app := &application{
+		Auth:      auth.NewAPIKeyAuth(authKeys),
 		Logger:    logger,
 		Config:    config,
 		Hub:       hub,
 		Publisher: publisher,
+		StartTime: time.Now(),
 	}
 
 	go app.Hub.Run()
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintln(w, "Server is up and running!")
-	})
-
-	http.HandleFunc("/ws", app.wsHandler)
-	// http.HandleFunc("/ws", app.authenticate(http.HandlerFunc(app.wsHandler)))
-
-	app.Logger.Info("Starting server", zap.String("address", ":"+app.Config.Port))
-	if err := http.ListenAndServe(":"+app.Config.Port, nil); err != nil {
-		app.Logger.Fatal("ListenAndServe error", zap.Error(err))
+	err = app.serve()
+	if err != nil {
+		logger.Fatal("error serving", zap.Error(err))
 	}
 }
 
@@ -114,16 +126,12 @@ func initLogger(debug bool) *zap.Logger {
 	return logger
 }
 
-func (app *application) wsHandler(w http.ResponseWriter, r *http.Request) {
-	ws, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		app.Logger.Error("Error upgrading to websocket:", zap.Error(err))
-		return
+// Shutdown cleans up resources
+func (app *application) Shutdown() {
+	// Shut down hub
+	if app.Hub != nil {
+		app.Hub.Shutdown()
 	}
 
-	conn := server.NewConnection(ws, app.Hub, app.Publisher, app.Logger)
-	app.Hub.Register(conn)
-
-	go conn.WritePump()
-	go conn.ReadPump()
+	app.Logger.Info("All components shut down successfully")
 }

@@ -7,16 +7,25 @@ import (
 )
 
 func (app *application) authenticate(next http.HandlerFunc) http.HandlerFunc {
-	TestApiKey := "test_api_key"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var apiKey string
-
-		if apiKey = r.Header.Get("X-Api-Key"); apiKey != TestApiKey {
-			app.Logger.Error("bad api key", zap.String(apiKey, ""))
-			w.WriteHeader(http.StatusForbidden)
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		apiKey := r.Header.Get("X-Api-Key")
+
+		if app.Auth.IsValidKey(apiKey) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		app.Logger.Warn(
+			"Authentication failed",
+			zap.String("path", r.URL.Path),
+			zap.String("remote_addr", r.RemoteAddr),
+		)
+		w.Header().Set("WWW-Authenticate", "APIKey")
+		http.Error(w, "Unauthorized: invalid API key", http.StatusUnauthorized)
 	})
 }

@@ -1,0 +1,29 @@
+package main
+
+import (
+	"net/http"
+
+	"github.com/tecu23/eng-server/pkg/server"
+	"go.uber.org/zap"
+)
+
+// handleWebSocket handles WebSocket connections
+func (app *application) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Upgrade HTTP connection to WebSocket
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		app.Logger.Error("Failed to upgrade to WebSocket", zap.Error(err))
+		return
+	}
+
+	// Create and register connection
+	conn := server.NewConnection(ws, app.Hub, app.Publisher, app.Logger)
+	app.Hub.Register(conn)
+
+	app.Logger.Info("WebSocket connection established",
+		zap.String("remote_addr", r.RemoteAddr))
+
+	// Start connection read/write goroutines
+	go conn.WritePump()
+	go conn.ReadPump()
+}

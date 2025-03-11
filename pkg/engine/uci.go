@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
 	"os/exec"
 	"strings"
 	"sync"
@@ -31,7 +30,6 @@ type UCIEngine struct {
 }
 
 // NewUCIEngine starts the engine process and returns a UCIEngine instance.
-// enginePath is the path yo tou engine executable (e.g. "argo")
 func NewUCIEngine(enginePath string, logger *zap.Logger) (*UCIEngine, error) {
 	cmd := exec.Command(enginePath)
 
@@ -79,16 +77,13 @@ func (e *UCIEngine) readLoop() {
 			line, err := e.reader.ReadString('\n')
 			if err != nil {
 				if err == io.EOF {
-					log.Println("Engine closed stdout.")
+					e.logger.Error("Engine closed stdout")
 				} else {
-					log.Println("Error reading engine output:", err)
+					e.logger.Error("Error reading engine output ", zap.Error(err))
 				}
 				return
 			}
 			line = strings.TrimSpace(line)
-
-			log.Println("ENGINE>", line)
-
 			// Check if the engine sent a best move.
 			if strings.HasPrefix(line, "bestmove") {
 				fields := strings.Fields(line)
@@ -114,6 +109,7 @@ func (e *UCIEngine) writeCommand(cmd string) error {
 	return err
 }
 
+// Close exists the engine
 func (e *UCIEngine) Close() error {
 	close(e.quitChan)
 	_ = e.writeCommand("quit")
@@ -123,6 +119,7 @@ func (e *UCIEngine) Close() error {
 	return nil
 }
 
+// SendCommand writes the command to the engine or returns an error
 func (e *UCIEngine) SendCommand(cmd string) error {
 	err := e.writeCommand(cmd)
 	if err != nil {
@@ -132,6 +129,7 @@ func (e *UCIEngine) SendCommand(cmd string) error {
 	return nil
 }
 
+// SetOption updates the engine configuration
 func (e *UCIEngine) SetOption(name, value string) error {
 	return nil
 }
