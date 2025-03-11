@@ -1,10 +1,12 @@
+// Package main is the entry point of the application
 package main
 
 import (
 	"net/http"
 
-	"github.com/tecu23/eng-server/pkg/server"
 	"go.uber.org/zap"
+
+	"github.com/tecu23/eng-server/pkg/server"
 )
 
 // handleWebSocket handles WebSocket connections
