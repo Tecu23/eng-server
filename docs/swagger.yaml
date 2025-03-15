@@ -1,0 +1,207 @@
+openapi: 3.0.0
+info:
+  title: Chess Engine Server API
+  description: |
+    API documentation for the Chess Engine Server, which provides WebSocket-based
+    communication for playing chess against UCI-compatible chess engines.
+  version: 1.0.0
+  contact:
+    name: Chess Engine Server Support
+    url: https://github.com/tecu23/eng-server
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://chess-engine-server.example.com
+    description: Production server
+tags:
+  - name: connection
+    description: WebSocket connection management
+  - name: game
+    description: Game session operations
+  - name: engine
+    description: Chess engine operations
+paths:
+  /ws:
+    get:
+      summary: WebSocket Connection Endpoint
+      description: |
+        Establishes a WebSocket connection to the chess engine server.
+        All subsequent communication occurs through this WebSocket connection.
+      tags:
+        - connection
+      responses:
+        '101':
+          description: WebSocket connection established
+        '400':
+          description: Bad request
+        '500':
+          description: Internal server error
+components:
+  schemas:
+    # General message structure
+    Message:
+      type: object
+      required:
+        - event
+        - payload
+      properties:
+        event:
+          type: string
+          description: Type of event
+        payload:
+          type: object
+          description: Event-specific data
+    # Client to Server Messages
+    CreateSessionPayload:
+      type: object
+      properties:
+        time_control:
+          type: object
+          properties:
+            white_time:
+              type: integer
+              description: Initial time for white in milliseconds
+              example: 300000
+            black_time:
+              type: integer
+              description: Initial time for black in milliseconds
+              example: 300000
+            white_increment:
+              type: integer
+              description: Increment per move for white in milliseconds
+              example: 2000
+            black_increment:
+              type: integer
+              description: Increment per move for black in milliseconds
+              example: 2000
+        color:
+          type: string
+          description: Player color (w or b)
+          enum: [w, b]
+          example: w
+        initial_fen:
+          type: string
+          description: Initial position in FEN notation, empty for standard position
+          example: ""
+    MakeMovePayload:
+      type: object
+      properties:
+        game_id:
+          type: string
+          format: uuid
+          description: ID of the game session
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        move:
+          type: string
+          description: Move in UCI notation
+          example: "e2e4"
+    # Server to Client Messages
+    ConnectedPayload:
+      type: object
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+          description: Unique ID for the client connection
+          example: "123e4567-e89b-12d3-a456-426614174000"
+    GameCreatedPayload:
+      type: object
+      properties:
+        game_id:
+          type: string
+          format: uuid
+          description: Unique ID for the game session
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        initial_fen:
+          type: string
+          description: Initial position in FEN notation
+          example: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        white_time:
+          type: integer
+          description: Initial time for white in milliseconds
+          example: 300000
+        black_time:
+          type: integer
+          description: Initial time for black in milliseconds
+          example: 300000
+        current_turn:
+          type: string
+          description: Color of the current player to move
+          enum: [w, b]
+          example: w
+    EngineMovePayload:
+      type: object
+      properties:
+        move:
+          type: string
+          description: Move made by the engine in UCI notation
+          example: "e7e5"
+        color:
+          type: string
+          description: Color that the engine is playing
+          enum: [w, b]
+          example: b
+    ClockUpdatePayload:
+      type: object
+      properties:
+        game_id:
+          type: string
+          format: uuid
+          description: ID of the game session
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        white_time_ms:
+          type: integer
+          description: Remaining time for white in milliseconds
+          example: 295000
+        black_time_ms:
+          type: integer
+          description: Remaining time for black in milliseconds
+          example: 298000
+        active_color:
+          type: string
+          description: Color of the active player
+          enum: [w, b]
+          example: w
+    TimeupPayload:
+      type: object
+      properties:
+        color:
+          type: string
+          description: Color of the player who ran out of time
+          enum: [w, b]
+          example: w
+    ErrorPayload:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Error message
+          example: "Invalid move"
+  # WebSocket events documentation
+  x-websocket-events:
+    clientToServer:
+      CREATE_SESSION:
+        description: Create a new game session
+        payload: '#/components/schemas/CreateSessionPayload'
+      MAKE_MOVE:
+        description: Make a move in an active game
+        payload: '#/components/schemas/MakeMovePayload'
+    serverToClient:
+      CONNECTED:
+        description: Connection successfully established
+        payload: '#/components/schemas/ConnectedPayload'
+      GAME_CREATED:
+        description: Game session successfully created
+        payload: '#/components/schemas/GameCreatedPayload'
+      ENGINE_MOVE:
+        description: Engine has made a move
+        payload: '#/components/schemas/EngineMovePayload'
+      CLOCK_UPDATE:
+        description: Clock time has been updated
+        payload: '#/components/schemas/ClockUpdatePayload'
+      TIME_UP:
+        description: A player has run out of time
+        payload: '#/components/schemas/TimeupPayload'
+      ERROR:
+        description: An error has occurred
+        payload: '#/components/schemas/ErrorPayload'

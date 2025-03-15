@@ -3,20 +3,19 @@ package main
 
 import (
 	"net/http"
-
-	"go.uber.org/zap"
 )
 
 func (app *application) routes() http.Handler {
 	mux := http.NewServeMux()
 
-	app.Logger.Info("Starting server", zap.String("address", ":"+app.Config.Port))
-	if err := http.ListenAndServe(":"+app.Config.Port, nil); err != nil {
-		app.Logger.Fatal("ListenAndServe error", zap.Error(err))
-	}
-
 	mux.HandleFunc("/health", app.handleHealth)
+
+	// For serving all files in the docs directory
+	mux.Handle("/docs/", http.StripPrefix("/docs/", http.FileServer(http.Dir("./docs"))))
+
 	mux.HandleFunc("/ws", app.authenticate(app.handleHealth))
+
+	app.Logger.Info("Routes configured successfully")
 
 	return mux
 }
